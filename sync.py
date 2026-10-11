@@ -2,6 +2,8 @@
 
 - Google ドキュメント → HTML 書き出しから作った Markdown（画像・図形描画は <名前>.images/ に取り出す）
 - Google スプレッドシート → XLSX と、XLSX から作った Markdown
+
+Markdown への変換は MarkItDown（＋ markitdown_ext の変換部品）で行う。
 - Google スライド → PPTX と PDF（Markdown 化は未実装）
 - それ以外のファイル → 原本のまま
 
@@ -22,9 +24,10 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
-from docs_html_to_md import docs_zip_to_markdown
+from markitdown import StreamInfo
+
 from list_folder import FOLDER_MIME, SHORTCUT_MIME, list_children
-from xlsx_to_md import xlsx_to_markdown
+from markitdown_ext import GOOGLE_DOCS_ZIP_MIME, ConversionResult, create_markitdown
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 CONFIG_FILE = Path("config.local.toml")
@@ -99,6 +102,24 @@ def write_markdown(out_dir, name, md, images):
     write_atomic(out_dir / f"{name}.md", md.encode("utf-8"))
 
 
+_markitdown = None
+
+
+def convert_to_markdown(data, stream_info, **kwargs):
+    """MarkItDown で Markdown に変換する
+
+    自前の変換部品（markitdown_ext）が失敗すると、MarkItDown は標準の変換を試す。
+    標準の変換は色や図形などが消えるので、それで成功した場合も「失敗」として扱い、保険の PDF に回す。
+    """
+    global _markitdown
+    if _markitdown is None:
+        _markitdown = create_markitdown()
+    result = _markitdown.convert_stream(io.BytesIO(data), stream_info=stream_info, **kwargs)
+    if not isinstance(result, ConversionResult):
+        raise RuntimeError("拡張の変換部品で変換できず、MarkItDown 標準の変換が使われた")
+    return result
+
+
 def save_doc_markdown(service, file_id, out_dir, name):
     """ドキュメントを HTML で書き出し、Markdown と画像（図形描画を含む）にして保存する
 
@@ -109,14 +130,22 @@ def save_doc_markdown(service, file_id, out_dir, name):
         markdown_export = export(service, file_id, MARKDOWN_MIME).decode("utf-8")
     except Exception:
         markdown_export = None
-    md, images = docs_zip_to_markdown(zip_data, name, f"{name}.images", markdown_export)
-    write_markdown(out_dir, name, md, images)
+    result = convert_to_markdown(
+        zip_data,
+        StreamInfo(mimetype=GOOGLE_DOCS_ZIP_MIME, extension=".zip", filename=f"{name}.zip"),
+        title=name, images_dirname=f"{name}.images", markdown_export=markdown_export,
+    )
+    write_markdown(out_dir, name, result.markdown, result.images)
 
 
 def save_xlsx_markdown(out_dir, name, data):
     """XLSX からシートごとの Markdown と画像を作って保存する"""
-    md, images = xlsx_to_markdown(data, name, f"{name}.images")
-    write_markdown(out_dir, name, md, images)
+    result = convert_to_markdown(
+        data,
+        StreamInfo(mimetype=XLSX_MIME, extension=".xlsx", filename=f"{name}.xlsx"),
+        title=name, images_dirname=f"{name}.images",
+    )
+    write_markdown(out_dir, name, result.markdown, result.images)
 
 
 def download_media(service, file_id):

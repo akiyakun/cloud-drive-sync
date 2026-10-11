@@ -5,6 +5,8 @@ Google の Markdown 書き出しでは消えてしまう情報を残すため、
 - 文字の色は〔文字色A:その文字〕、ハイライトは〔色A:その文字〕、下線は <u>…</u> で残す
 - 表のセルの背景色は〔色A〕、結合は〔結合 横2×縦1〕の印で残す
 - チェックリストは HTML では普通の箇条書きになるため、Google の Markdown 書き出しから「- [ ]」を補う
+
+MarkItDown 用の変換部品（GoogleDocsZipConverter）として使う。
 """
 
 import io
@@ -15,7 +17,13 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlparse
 
-from colors import ColorLabels, is_notable_text_color, normalize
+from markitdown import DocumentConverter, StreamInfo
+
+from .colors import ColorLabels, is_notable_text_color, normalize
+from .result import ConversionResult
+
+# sync.py が Google ドキュメントの HTML 書き出しを渡すときに付ける種類名（独自）
+GOOGLE_DOCS_ZIP_MIME = "application/vnd.google-apps.document+zip"
 
 VOID_TAGS = {"img", "br", "hr", "meta", "link", "input", "col", "area", "base", "wbr", "source"}
 LIST_CLASS = re.compile(r"lst-kix_([\w-]+?)-(\d+)\b")
@@ -269,7 +277,8 @@ class Converter:
             return
         text = self.inline(node)
         if text:
-            out.append(("p", text.replace("\n", "  \n")))
+            # 段落内の改行は <br> で表す（MarkItDown は行末の空白を削るので「空白 2 つ」の改行は使えない）
+            out.append(("p", text.replace("\n", "<br>\n")))
 
     def _list(self, node, out):
         m = next((LIST_CLASS.search(c) for c in node.classes() if LIST_CLASS.search(c)), None)
@@ -305,7 +314,7 @@ class Converter:
                 parts = []
                 inner = []
                 self.blocks(td, inner)
-                text = "<br>".join(t for _, t in inner).replace("  \n", "<br>").replace("|", "\\|")
+                text = "<br>".join(t for _, t in inner).replace("<br>\n", "<br>").replace("|", "\\|")
                 parts.append(text)
                 bg = normalize(_style(td).get("background-color", ""))
                 if bg and bg != "#FFFFFF":
@@ -420,3 +429,46 @@ def docs_zip_to_markdown(zip_data, title, images_dirname, markdown_export=None):
         if path in names:
             images.append((posixpath.basename(path), zf.read(path)))
     return "\n".join(parts) + "\n", images
+
+
+def _looks_like_google_docs_zip(file_stream):
+    """Google ドキュメントの「ウェブページ（.html、zip）」書き出しの形か（中身を読んだら位置を元に戻す）"""
+    position = file_stream.tell()
+    try:
+        zf = zipfile.ZipFile(file_stream)
+        names = zf.namelist()
+        htmls = [n for n in names if n.endswith(".html")]
+        if len(htmls) != 1 or "/" in htmls[0]:
+            return False
+        if any(n != htmls[0] and not n.startswith("images/") for n in names):
+            return False
+        return b"doc-content" in zf.read(htmls[0])[:200_000]
+    except zipfile.BadZipFile:
+        return False
+    finally:
+        file_stream.seek(position)
+
+
+class GoogleDocsZipConverter(DocumentConverter):
+    """MarkItDown 用の Google ドキュメント変換部品（HTML 書き出しの zip を受け付ける）
+
+    convert() に渡せる追加の引数:
+        title: 冒頭の説明に入れる名前（省略時はファイル名）
+        images_dirname: 画像リンクの置き場所（省略時は「<title>.images」）
+        markdown_export: Google の Markdown 書き出し（チェックリストを補うため。省略可）
+    """
+
+    def accepts(self, file_stream, stream_info: StreamInfo, **kwargs):
+        if (stream_info.mimetype or "") == GOOGLE_DOCS_ZIP_MIME:
+            return True
+        if (stream_info.extension or "").lower() == ".zip":
+            return _looks_like_google_docs_zip(file_stream)
+        return False
+
+    def convert(self, file_stream, stream_info: StreamInfo, **kwargs):
+        title = kwargs.get("title") or posixpath.splitext(stream_info.filename or "document")[0]
+        images_dirname = kwargs.get("images_dirname") or f"{title}.images"
+        markdown, images = docs_zip_to_markdown(
+            file_stream.read(), title, images_dirname, kwargs.get("markdown_export")
+        )
+        return ConversionResult(markdown, title=title, images=images)

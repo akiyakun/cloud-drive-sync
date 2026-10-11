@@ -1,5 +1,8 @@
 """XLSX をシートごとの Markdown に変換する（AI が直接読めない XLSX を読める形にするため）
 
+MarkItDown 標準の XLSX 変換は、セル番地・色・結合・画像・図形描画・グラフ・数式・コメントなどが消えるため、
+その代わりに使う変換部品（XlsxConverter）。Google の書き出しに限らず、どんな .xlsx にも使える。
+
 - セル番地（A1 など）付きの表にして、セルで作った図の位置関係も追えるようにする
 - セルの背景色を〔色A〕、文字の色を〔文字色A〕などの記号で残す（凡例の色分けや、目立たせたい一言など、色に意味がある資料のため）
   セルの中の一部の文字だけに色が付いている場合は〔文字色A:その文字〕の形にする
@@ -17,13 +20,17 @@ import zipfile
 from collections import Counter
 from datetime import date, datetime, time
 
+from markitdown import DocumentConverter, StreamInfo
 from openpyxl import load_workbook
 from openpyxl.cell.rich_text import CellRichText
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 
-from colors import ColorLabels, color_name, is_notable_text_color, normalize
-from xlsx_drawings import describe_anchors, image_files, read_sheet_drawings
+from .colors import ColorLabels, color_name, is_notable_text_color, normalize
+from .result import ConversionResult
+from .xlsx_drawings import describe_anchors, image_files, read_sheet_drawings
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # スレッド形式コメントの先頭に付く「[Threaded comment] ... Comment:」までの定型文
 THREADED_HEADER = re.compile(r"^\[Threaded comment\].*?\nComment:\n", re.S)
@@ -326,3 +333,21 @@ def xlsx_to_markdown(data, title, images_dirname):
 
     images = [(posixpath.basename(m), zf.read(m)) for m in image_files(drawings)]
     return "\n".join(parts) + "\n", images
+
+
+class XlsxConverter(DocumentConverter):
+    """MarkItDown 用の XLSX 変換部品（MarkItDown 標準の XLSX 変換の代わりに使う）
+
+    convert() に渡せる追加の引数:
+        title: Markdown の先頭の見出し（省略時はファイル名）
+        images_dirname: 画像リンクの置き場所（省略時は「<title>.images」）
+    """
+
+    def accepts(self, file_stream, stream_info: StreamInfo, **kwargs):
+        return (stream_info.extension or "").lower() == ".xlsx" or (stream_info.mimetype or "") == XLSX_MIME
+
+    def convert(self, file_stream, stream_info: StreamInfo, **kwargs):
+        title = kwargs.get("title") or posixpath.splitext(stream_info.filename or "spreadsheet")[0]
+        images_dirname = kwargs.get("images_dirname") or f"{title}.images"
+        markdown, images = xlsx_to_markdown(file_stream.read(), title, images_dirname)
+        return ConversionResult(markdown, title=title, images=images)

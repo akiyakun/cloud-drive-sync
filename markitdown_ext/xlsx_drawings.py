@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from openpyxl.utils import get_column_letter
 
-from colors import color_name, normalize
+from .colors import color_name, normalize
 
 NS = {
     "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
