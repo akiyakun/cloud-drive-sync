@@ -1,0 +1,23 @@
+# CloudDrive-Sync 設定ファイルの見本
+#
+# 使い方: このファイルを config.local.toml という名前でコピーし、値を書き換える。
+#   cp config.example.toml config.local.toml
+# config.local.toml は .gitignore で除外されているので、実際の ID などはそちらに書く。
+
+# OAuth トークンの場所（auth.py が作るファイル）
+token_file = "token.json"
+
+# 同期結果の出力先（フォルダごとに output_root/<name>/ の下へ保存する）
+output_root = "output"
+
+# 同期するフォルダ。[[folders]] のブロックを増やせば複数フォルダを別々の設定で扱える
+[[folders]]
+name = "example"                   # 出力先のサブフォルダ名（英数字推奨）
+folder_id = "YOUR_DRIVE_FOLDER_ID" # Drive のフォルダ URL の folders/ の後ろの文字列
+recursive = true                   # サブフォルダの中も対象にするか
+
+# フォルダではなくファイルを1つだけ同期したいとき（共有されたファイルなど）
+# 出力先は output_root/<name>/ の下
+[[files]]
+name = "example-file"              # 出力先のサブフォルダ名
+file_id = "YOUR_DRIVE_FILE_ID"     # ファイル URL の /d/ の後ろの文字列
