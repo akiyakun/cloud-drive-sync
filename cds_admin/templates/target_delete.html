@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}同期先の削除 - CloudDrive-Sync{% endblock %}
-{% block header_actions %}<a href="/">← 戻る</a>{% endblock %}
+{% block header_actions %}{% if popup %}<button type="button" class="link" data-close>閉じる</button>{% else %}<a href="/">← 戻る</a>{% endif %}{% endblock %}
 {% block content %}
 <section class="card">
   <h2>同期先「{{ name }}」（{{ kind_label }}）を削除しますか？</h2>
@@ -17,7 +17,10 @@
   <form method="post" action="/targets/delete">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="name" value="{{ name }}">
-    <div class="actions"><button type="submit" class="danger">削除する</button><a class="button" href="/">やめる</a></div>
+    {% if popup %}<input type="hidden" name="popup" value="1">{% endif %}
+    <div class="actions"><button type="submit" class="danger">削除する</button>
+      {% if popup %}<button type="button" data-close>やめる</button>{% else %}<a class="button" href="/">やめる</a>{% endif %}</div>
   </form>
 </section>
 {% endblock %}
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

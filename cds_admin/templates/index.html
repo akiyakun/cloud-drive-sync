@@ -50,26 +50,35 @@
   {% if targets_error %}
   <p class="msg error">{{ targets_error }}</p>
   {% else %}
-  {% if targets %}
-  <div class="table-wrap"><table>
+  {% if target_groups %}
+  <div class="table-wrap"><table class="targets">
     <thead><tr><th>名前</th><th>種類</th><th>出力先</th><th>記録</th><th></th></tr></thead>
+    {% for group, rows in target_groups %}
     <tbody>
-    {% for t in targets %}
+    <tr class="group-row"><th colspan="4">{% if group %}{{ group }}{% else %}<span class="muted">グループなし</span>{% endif %}</th>
+      <td class="row-actions">{% if group %}<a href="/targets/new?kind=folder&amp;group={{ group | urlencode }}" data-popup>＋フォルダ</a> <a href="/targets/new?kind=file&amp;group={{ group | urlencode }}" data-popup>＋ファイル</a>{% endif %}</td></tr>
+    {% for t in rows %}
     <tr{% if not t.active %} class="inactive"{% endif %}>
       <td>{{ t.name }}{% if not t.active %} <span class="badge paused">この環境では同期しない</span>{% endif %}</td>
       <td>{{ t.kind_label }}{% if t.kind == "folder" and not t.recursive %}<span class="muted small">（直下だけ）</span>{% endif %}</td>
       <td class="wrap"><code>{{ t.output }}</code>{% if t.last_out %}<div class="muted small">前回: {{ t.last_out }}</div>{% endif %}</td>
       <td>{% if t.last_out %}{{ t.files }} 個{% else %}<span class="muted">未同期</span>{% endif %}</td>
-      <td class="row-actions"><a href="/targets/edit?name={{ t.name | urlencode }}">編集</a> <a href="/targets/delete?name={{ t.name | urlencode }}" class="danger-link">削除</a></td>
+      <td class="row-actions"><a href="/targets/edit?name={{ t.name | urlencode }}" data-popup>編集</a> <a href="/targets/delete?name={{ t.name | urlencode }}" class="danger-link" data-popup>削除</a></td>
     </tr>
     {% endfor %}
     </tbody>
+    {% endfor %}
   </table></div>
   {% else %}
   <p class="muted">同期先がありません。下のボタンから追加してください。</p>
   {% endif %}
-  <div class="actions"><a class="button" href="/targets/new?kind=folder">フォルダを追加</a><a class="button" href="/targets/new?kind=file">ファイルを追加</a></div>
-  <p class="muted small">変更は次の同期から反映されます。同期中は変更できません。</p>
+  <div class="actions"><a class="button" href="/targets/new?kind=folder" data-popup>フォルダを追加</a><a class="button" href="/targets/new?kind=file" data-popup>ファイルを追加</a></div>
+  <p class="muted small">追加・編集・削除は別のウィンドウで開きます。変更は次の同期から反映されます。同期中は変更できません。グループは、この一覧を分けるためだけのものです（同期には関係しません）。</p>
+  <div class="note">
+    <strong>出力の土台（<code>{{ output_label }}</code>）について</strong>
+    <p>出力先は、この場所から見た場所です。この場所そのものは、NAS のリポジトリの <code>.env</code> の <code>CDS_OUTPUT_DIR</code> で決まります（コンテナの中では <code>/output</code> に見えます）。</p>
+    <p><code>CDS_OUTPUT_DIR</code> を変えて再デプロイしても、<strong>今までの出力は自動では引っ越しません</strong>（アプリからはどちらも同じ <code>/output</code> に見えるため）。変える前に今の出力を新しい場所へ手で移すか、新しい場所で作り直してください。</p>
+  </div>
   {% endif %}
 </section>
 

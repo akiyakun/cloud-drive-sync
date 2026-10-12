@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}同期先 - CloudDrive-Sync{% endblock %}
+{% block header_actions %}<button type="button" class="link" data-close>閉じる</button>{% endblock %}
+{% block content %}
+<section class="card" id="done" data-auto-close="{{ 'true' if kind == 'ok' else 'false' }}">
+  <p class="msg {{ kind }}">{{ text }}</p>
+  <p class="muted small">元の画面の一覧を更新しました。{% if kind == "ok" %}このウィンドウは自動で閉じます。{% endif %}閉じないときは、このウィンドウを閉じてください。</p>
+  <button type="button" data-close>閉じる</button>
+</section>
+{% endblock %}
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

@@ -136,6 +136,42 @@ class TargetPagesTests(unittest.TestCase):
         self.assertEqual(self.config()["files"], [{"name": "進行表", "output": "Proj/AI", "file_id": "sheetCCCCCCCCC"}])
         self.assertEqual(self.config()["folders"][1]["environments"], ["nas"])  # ほかの同期先の設定は残る
 
+    def test_groups(self):
+        self.assertEqual(targets.parse_group("  案件A "), "案件A")
+        self.assertIsNone(targets.parse_group(""))
+        for bad in ["x" * 41, "a\nb"]:
+            with self.assertRaises(ValueError, msg=bad):
+                targets.parse_group(bad)
+        self.save(name="案件B", group="案件B", drive="folderBBBBBBBB", output="案件B/AI")
+        self.save(kind="file", name="進行表", group="案件B", drive="sheetCCCCCCCCC", output="案件B")
+        self.assertEqual(self.config()["folders"][-1]["group"], "案件B")
+        page = self.client.get("/").text
+        self.assertIn("グループなし", page)  # main・devonly はグループなし
+        self.assertLess(page.index("案件B"), page.index("グループなし"))  # グループなしは最後
+        # グループから追加: 出力先の頭にグループ名が入る
+        form = self.client.get("/targets/new?kind=folder&group=" + "案件B").text
+        self.assertIn('value="案件B/"', form)
+        self.assertIn('<option value="案件B">', form)
+        # グループを外す
+        self.save(original="案件B", name="案件B", group="", drive="folderBBBBBBBB", output="案件B/AI")
+        self.assertNotIn("group", self.config()["folders"][-1])
+
+    def test_popup_shows_result_page(self):
+        response = self.save(name="案件B", drive="folderBBBBBBBB", output="B", popup="1")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="done"', response.text)
+        self.assertIn("保存しました", response.text)
+        self.assertNotIn("保存しました", self.client.get("/").text)  # 元の画面には重ねて出さない
+        error = self.save(name="x", drive="folderZZZZZZZZ", popup="1")
+        self.assertIn('name="popup" value="1"', error.text)  # まちがいを直して保存し直しても、別ウィンドウのまま
+        deleted = self.client.post("/targets/delete", data={"csrf": self.csrf(), "name": "案件B", "popup": "1"})
+        self.assertIn("削除しました", deleted.text)
+
+    def test_output_root_note(self):
+        page = self.client.get("/").text
+        self.assertIn("CDS_OUTPUT_DIR", page)
+        self.assertIn("自動では引っ越しません", page)
+
     def test_rejects_bad_input(self):
         before = self.config_path.read_text()
         cases = [

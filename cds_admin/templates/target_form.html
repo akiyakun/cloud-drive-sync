@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}同期先の{{ "追加" if mode == "new" else "編集" }} - CloudDrive-Sync{% endblock %}
-{% block header_actions %}<a href="/">← 戻る</a>{% endblock %}
+{% block header_actions %}{% if popup %}<button type="button" class="link" data-close>閉じる</button>{% else %}<a href="/">← 戻る</a>{% endif %}{% endblock %}
 {% block content %}
 <section class="card">
   <h2>同期先の{{ "追加" if mode == "new" else "編集" }}（{{ kind_label }}）</h2>
@@ -8,11 +8,17 @@
   <form method="post" action="/targets/save" class="target-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="kind" value="{{ kind }}">
+    {% if popup %}<input type="hidden" name="popup" value="1">{% endif %}
     {% if values.original %}<input type="hidden" name="original" value="{{ values.original }}">{% endif %}
 
     <label for="name">名前</label>
     <input id="name" name="name" type="text" value="{{ values.name or '' }}" maxlength="64" required>
     <p class="muted small">管理画面で同期先を見分けるための名前です。同期の記録と退避のフォルダ名にも使います（変えると、それらの名前も変わります）。</p>
+
+    <label for="group">グループ</label>
+    <input id="group" name="group" type="text" value="{{ values.group or '' }}" maxlength="40" list="group-list" placeholder="（空ならグループなし）">
+    <datalist id="group-list">{% for g in groups %}<option value="{{ g }}">{% endfor %}</datalist>
+    <p class="muted small">管理画面の一覧を分けるためだけのものです（同期には関係しません）。{% if mode == "new" %}出力先が空か、グループ名のままなら、出力先の頭にグループ名を入れます。{% endif %}</p>
 
     <label for="drive">Drive の{{ "フォルダ" if kind == "folder" else "ファイル" }}の URL か ID</label>
     <input id="drive" name="drive" type="text" value="{{ values.drive or '' }}" autocomplete="off" required
@@ -22,7 +28,8 @@
 
     <label for="output">出力先</label>
     <div class="path-input"><span class="muted">{{ output_label }}/</span>
-      <input id="output" name="output" type="text" value="{{ values.output or '' }}" placeholder="（空なら名前と同じ）" class="wide"></div>
+      <input id="output" name="output" type="text" value="{{ values.output or '' }}" placeholder="（空なら名前と同じ）" class="wide"
+        {% if mode == "new" %}data-group-prefix{% endif %}></div>
     <p class="muted small">AI が読む場所の中の、どこに出力するか。<code>/</code> で区切ってフォルダの中を指定できます。<code>{drive_name}</code> と書くと Drive 上の{{ "フォルダ名" if kind == "folder" else "ファイル名" }}になります（例: <code>案件A/GoogleDrive-AI/{drive_name}</code>）。
       変えると、次の同期で今までの出力を新しい場所へ移します。
       {% if kind == "folder" %}フォルダの同期先どうしは、同じ場所や、中に入れる形にはできません。{% else %}ファイルは、ほかの同期先と同じフォルダに置けます（フォルダの同期先の中には置けません）。{% endif %}</p>
@@ -31,7 +38,9 @@
     <label class="choice"><input type="checkbox" name="recursive" value="1" {% if values.recursive %}checked{% endif %}> サブフォルダの中も同期する</label>
     {% endif %}
 
-    <div class="actions"><button type="submit" class="primary">保存</button><a class="button" href="/">やめる</a></div>
+    <div class="actions"><button type="submit" class="primary">保存</button>
+      {% if popup %}<button type="button" data-close>やめる</button>{% else %}<a class="button" href="/">やめる</a>{% endif %}</div>
   </form>
 </section>
 {% endblock %}
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

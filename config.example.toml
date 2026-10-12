@@ -26,6 +26,7 @@ archive_root = "data/dev/archive"
 # 同期するフォルダ。[[folders]] のブロックを増やせば複数フォルダを別々の設定で扱える
 [[folders]]
 name = "example"                   # 同期先の名前（同期の記録・退避のフォルダ名にも使う。重複できない）
+group = "Example"                  # 管理画面の一覧を分けるグループ（省略できる。同期には関係しない）
 output = "Example/GoogleDrive-AI/{drive_name}"  # 出力先（output_root から見た場所）。省略すると name と同じ
                                    # {drive_name} は Drive 上のフォルダ名になる（名前が変わったら出力も引っ越す）
                                    # フォルダの同期先どうしは、同じ場所・入れ子にできない

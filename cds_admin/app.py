@@ -207,33 +207,55 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             return str(path)
         return label if rel == "." else f"{label}/{rel}"
 
+    def output_label():
+        try:
+            config = config_file.effective()
+            return shown_path(config, Path(config["output_root"]))
+        except (OSError, ValueError, KeyError):
+            return "出力の土台"
+
     def targets_view():
-        """一覧に出す同期先。読めなければ (None, 理由)"""
+        """一覧に出す同期先を、グループごとにまとめる。[(グループ名か None, [同期先, ...]), ...]。読めなければ (None, 理由)"""
         try:
             data, config = config_file.raw(), config_file.effective()
         except (OSError, ValueError) as e:
             return None, f"設定ファイル（{config_file.path.name}）を読めません: {type(e).__name__}: {e}"
-        rows = []
+        groups = {}
         for kind, target in target_ops.list_targets(data):
             info = target_ops.summarize(config, kind, target)
-            rows.append({
+            groups.setdefault(target.get("group") or None, []).append({
                 "kind": kind, "kind_label": target_ops.KIND_LABELS[kind], "name": target["name"],
-                "drive_id": target.get("folder_id" if kind == "folder" else "file_id", ""),
                 "output": target.get("output") or target["name"], "recursive": target.get("recursive", True),
                 "active": target_ops.is_active(target), "environments": target.get("environments"),
                 "last_out": shown_path(config, info["out_dir"]), "files": info["files"],
             })
-        return rows, None
+        # グループは設定に書いた順。グループなしは最後
+        return sorted(groups.items(), key=lambda g: g[0] is None), None
 
-    def form_page(request, session, mode, kind, values, error=None, status_code=200):
+    def group_names():
         try:
-            config = config_file.effective()
-            label = shown_path(config, Path(config["output_root"]))
-        except (OSError, ValueError, KeyError):
-            label = "出力の土台"
+            return target_ops.group_names(config_file.raw())
+        except (OSError, ValueError):
+            return []
+
+    def is_popup(request, form=None):
+        """別ウィンドウ（同期先の追加・編集・削除）で開いているか"""
+        return (form.get("popup") if form is not None else request.query_params.get("popup")) == "1"
+
+    def finish(request, session, popup, kind, text):
+        """操作の結果を伝える。別ウィンドウなら結果の画面（元の画面を更新して閉じる）、そうでなければ一覧へ戻る"""
+        if popup:
+            return templates.TemplateResponse(request, "target_done.html", {
+                "kind": kind, "text": text, "version": __version__,
+            })
+        flash(session, kind, text)
+        return back()
+
+    def form_page(request, session, mode, kind, values, popup, error=None, status_code=200):
         return templates.TemplateResponse(request, "target_form.html", {
             "csrf": session["csrf"], "mode": mode, "kind": kind, "kind_label": target_ops.KIND_LABELS[kind],
-            "values": values, "error": error, "output_label": label, "version": __version__,
+            "values": values, "error": error, "output_label": output_label(), "groups": group_names(),
+            "popup": popup, "version": __version__,
         }, status_code=status_code)
 
     @login_required
@@ -241,35 +263,41 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         kind = request.query_params.get("kind")
         if kind not in target_ops.KINDS:
             return back()
-        return form_page(request, session, "new", kind, {"recursive": True})
+        group = (request.query_params.get("group") or "").strip()
+        # グループから追加したときは、出力先の頭にグループ名を入れておく
+        return form_page(request, session, "new", kind, {
+            "recursive": True, "group": group, "output": f"{group}/" if group else "",
+        }, is_popup(request))
 
     @login_required
     async def target_edit_page(request, token, session, form):
+        popup = is_popup(request)
         try:
             kind, target = target_ops.find_target(config_file.raw(), request.query_params.get("name"))
         except (OSError, ValueError):
             kind = None
         if kind is None:
-            flash(session, "error", "その同期先は見つかりません。")
-            return back()
+            return finish(request, session, popup, "error", "その同期先は見つかりません。")
         return form_page(request, session, "edit", kind, {
-            "original": target["name"], "name": target["name"],
+            "original": target["name"], "name": target["name"], "group": target.get("group", ""),
             "drive": target.get("folder_id" if kind == "folder" else "file_id", ""),
             "output": target.get("output", ""), "recursive": target.get("recursive", True),
-        })
+        }, popup)
 
     @login_required
     async def target_save(request, token, session, form):
         original = form.get("original") or None
         kind = form.get("kind")
-        values = {"original": original, "name": form.get("name", ""), "drive": form.get("drive", ""),
-                  "output": form.get("output", ""), "recursive": form.get("recursive") == "1"}
+        popup = is_popup(request, form)
+        values = {"original": original, "name": form.get("name", ""), "group": form.get("group", ""),
+                  "drive": form.get("drive", ""), "output": form.get("output", ""),
+                  "recursive": form.get("recursive") == "1"}
         mode = "edit" if original else "new"
         if kind not in target_ops.KINDS:
             return back()
 
         def fail(message):
-            return form_page(request, session, mode, kind, values, message, status_code=400)
+            return form_page(request, session, mode, kind, values, popup, message, status_code=400)
 
         if runner.is_running():
             return fail("同期中は変更できません。同期が終わってから、もう一度保存してください。")
@@ -281,6 +309,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
                 if current is None or found_kind != kind:
                     return fail("編集していた同期先が見つかりません（ほかの画面で変更・削除されたかもしれません）。")
             name = target_ops.parse_name(values["name"])
+            group = target_ops.parse_group(values["group"])
             drive_id = target_ops.parse_drive_id(values["drive"])
             output = target_ops.parse_output(values["output"])
             target_ops.check_unique(data, name, ignore=current)
@@ -292,10 +321,11 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             if current is None:
                 data.setdefault(target_ops.KINDS[kind], []).append(target)
             target["name"] = name
-            if output is None:
-                target.pop("output", None)
-            else:
-                target["output"] = output
+            for key, value in (("group", group), ("output", output)):
+                if value is None:
+                    target.pop(key, None)
+                else:
+                    target[key] = value
             target[id_key] = drive_id
             if kind == "folder":
                 target["recursive"] = values["recursive"]
@@ -321,50 +351,47 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             return fail(str(e))
         except OSError as e:
             return fail(f"保存できませんでした（{type(e).__name__}: {e}）")
-        flash(session, "ok", f"同期先「{name}」を保存しました（Drive 上の名前: {item.get('name')}）。次の同期から反映されます。")
-        return back()
+        return finish(request, session, popup, "ok",
+                      f"同期先「{name}」を保存しました（Drive 上の名前: {item.get('name')}）。次の同期から反映されます。")
 
     @login_required
     async def target_delete_page(request, token, session, form):
+        popup = is_popup(request)
         try:
             config = config_file.effective()
             kind, target = target_ops.find_target(config_file.raw(), request.query_params.get("name"))
         except (OSError, ValueError):
             kind = None
         if kind is None:
-            flash(session, "error", "その同期先は見つかりません。")
-            return back()
+            return finish(request, session, popup, "error", "その同期先は見つかりません。")
         info = target_ops.summarize(config, kind, target)
         return templates.TemplateResponse(request, "target_delete.html", {
             "csrf": session["csrf"], "name": target["name"], "kind_label": target_ops.KIND_LABELS[kind],
-            "out_dir": shown_path(config, info["out_dir"]), "files": info["files"], "version": __version__,
+            "out_dir": shown_path(config, info["out_dir"]), "files": info["files"], "popup": popup,
+            "version": __version__,
         })
 
     @login_required
     async def target_delete(request, token, session, form):
         name = form.get("name")
+        popup = is_popup(request, form)
         if runner.is_running():
-            flash(session, "error", "同期中は削除できません。同期が終わってから、もう一度操作してください。")
-            return back()
+            return finish(request, session, popup, "error", "同期中は削除できません。同期が終わってから、もう一度操作してください。")
         try:
             data, config = config_file.raw(), config_file.effective()
             kind, target = target_ops.find_target(data, name)
             if kind is None:
-                flash(session, "error", "その同期先は見つかりません。")
-                return back()
+                return finish(request, session, popup, "error", "その同期先は見つかりません。")
             data[target_ops.KINDS[kind]].remove(target)
             config_file.save(data)
         except (OSError, ValueError) as e:
-            flash(session, "error", f"削除できませんでした（{type(e).__name__}: {e}）")
-            return back()
+            return finish(request, session, popup, "error", f"削除できませんでした（{type(e).__name__}: {e}）")
         try:
             archived = target_ops.retire_outputs(config, kind, name)
         except OSError as e:
-            flash(session, "warn", f"同期先「{name}」を削除しましたが、出力の退避の途中で失敗しました"
-                  f"（{type(e).__name__}）。残った出力は手で整理してください。")
-            return back()
-        flash(session, "ok", f"同期先「{name}」を削除しました。出力 {archived} 個を退避へ移しました。")
-        return back()
+            return finish(request, session, popup, "warn", f"同期先「{name}」を削除しましたが、出力の退避の途中で失敗しました"
+                          f"（{type(e).__name__}）。残った出力は手で整理してください。")
+        return finish(request, session, popup, "ok", f"同期先「{name}」を削除しました。出力 {archived} 個を退避へ移しました。")
 
     # --- 画面 ---
 
@@ -394,7 +421,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             "min_password": MIN_PASSWORD_LENGTH, "version": __version__,
             "archive": settings["archive"], "min_archive_gb": MIN_ARCHIVE_GB, "max_archive_gb": MAX_ARCHIVE_GB,
             "archive_info": next((r for r in runner.history() if r.get("archive")), None),
-            "targets": targets_rows, "targets_error": targets_error,
+            "target_groups": targets_rows, "targets_error": targets_error, "output_label": output_label(),
         })
 
     @login_required

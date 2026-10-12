@@ -4,6 +4,7 @@
 - 名前を変えたら、同期の記録（state/<名前>.json）と退避（archive/<名前>/）の名前も変える
 - 同期先を削除したら、その同期先の出力を退避（archive/<名前>/<実行日時>/）へ移し、記録を消す
 - 出力先が変わったときの出力の引っ越しは、次の同期で sync.py が行う（記録の out_dir と比べる）
+- group は管理画面の一覧を分けるためだけの項目（sync.py は読まない）
 """
 
 import json
@@ -40,6 +41,26 @@ def parse_name(text):
     if name.startswith(".") or sync.safe_name(name) != name:
         raise ValueError('名前に使えない文字があります（\\ / : * ? " < > | や、先頭の . は使えません）')
     return name
+
+
+MAX_GROUP_LENGTH = 40
+
+
+def parse_group(text):
+    """グループ（管理画面の一覧を分けるだけ。同期には使わない）。空なら None"""
+    group = (text or "").strip()
+    if not group:
+        return None
+    if len(group) > MAX_GROUP_LENGTH:
+        raise ValueError(f"グループは {MAX_GROUP_LENGTH} 文字までです")
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in group):
+        raise ValueError("グループに使えない文字があります")
+    return group
+
+
+def group_names(data):
+    """設定にあるグループ（書いてある順、重なりなし）"""
+    return list(dict.fromkeys(t["group"] for _, t in list_targets(data) if t.get("group")))
 
 
 def parse_drive_id(text):
