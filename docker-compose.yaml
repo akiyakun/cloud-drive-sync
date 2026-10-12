@@ -1,0 +1,37 @@
+services:
+  cloud-drive-sync:
+    build: .
+    image: cloud-drive-sync:0.1.0
+    container_name: cloud-drive-sync
+    # Phase 1: run the sync once and exit (the scheduler and admin UI come later)
+    restart: "no"
+    user: "28103:28103"
+    environment:
+      TZ: Asia/Tokyo
+    volumes:
+      # Secrets: SSH-only folder outside the SMB shares, read-only
+      - type: bind
+        source: "${CDS_SECRETS_DIR:?Set CDS_SECRETS_DIR in .env}"
+        target: /secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      # Config, sync state and archive
+      - type: bind
+        source: "${CDS_DATA_DIR:-./data}"
+        target: /data
+        bind:
+          create_host_path: false
+      # Output root that the AI reads (only this folder, not the whole share)
+      - type: bind
+        source: "${CDS_OUTPUT_DIR:?Set CDS_OUTPUT_DIR in .env}"
+        target: /output
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 1g

@@ -1,0 +1,8 @@
+# Allowlist: exclude everything, then add back only what the image needs
+**
+!requirements.txt
+!sync.py
+!sync_state.py
+!list_folder.py
+!markitdown_ext/
+!markitdown_ext/*.py

@@ -17,8 +17,8 @@ python sync.py --config 別の設定.toml  # 設定ファイルを指定する�
 | 場所 | 中身 | AI が読む？ |
 |---|---|---|
 | `data/config.toml` | 同期の設定 | 読まない |
-| `data/state/` | 前回の同期の記録 | 読まない |
-| `data/archive/` | Drive から消えたファイルの出力の退避先 | 読まない |
+| `data/state/`、`data/archive/` | 本番（NAS のコンテナ）の同期の記録と退避先 | 読まない |
+| `data/dev/state/`、`data/dev/archive/` | Mac での開発用の同期の記録と退避先（本番と混ざらないように分ける） | 読まない |
 | 出力先（`output_root` の下） | Markdown・画像など | **読む** |
 
 ### 秘密（鍵）の置き場所
@@ -124,6 +124,24 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 - 版の変更
 - 保険の PDF とそこからの回復
 - 記録にないファイル
+
+## Docker（NAS で動かす）
+
+| ファイル | 内容 |
+|---|---|
+| `Dockerfile` | Python 3.12。UID/GID **28103**（`.secrets` の持ち主と同じ）で動く。コンテナの中の場所は環境変数で決める（`CDS_ENV=nas`、`/secrets/token.json`、`/data/config.toml`、`/output`、`/data/state`、`/data/archive`） |
+| `docker-compose.yaml` | 安全設定（読み取り専用のコンテナ、権限を全部外す、など）は MCP のリポジトリと同じ。つなぐのは次の 3 か所だけ |
+| `.env.example` | つなぐ場所の見本。`.env` にコピーして使う（git に入れない） |
+
+| コンテナの中 | つなぐ先（`.env`） | 扱い |
+|---|---|---|
+| `/secrets` | `CDS_SECRETS_DIR`（NAS: `/volume3/.secrets/cloud-drive-sync`） | 読み取り専用 |
+| `/data` | `CDS_DATA_DIR`（既定 `./data`） | 書き込み（設定・記録・退避） |
+| `/output` | `CDS_OUTPUT_DIR`（NAS: `/volume3/ndrive/CloudDrive`） | 書き込み（AI が読む出力） |
+
+- 第 1 段階（今）は、起動すると 1 回同期して終わる。定期実行と管理画面は次の段階で足す。
+- Mac では OrbStack で build と動作を確かめる（Mac は arm64、NAS は x86_64 なので、本番のイメージは NAS で build する）。Mac で試すときは、`.env` の代わりに Mac の場所を書いた設定ファイルを `--env-file` で渡し、記録と出力は開発用・本番用と別の場所にする。
+- コンテナ（Python 3.12）と Mac（Python 3.13）の出力を比べ、Markdown の内容が同じことを確かめた。違いは画像のファイル名の番号だけで、これは Google が書き出すたびに番号を振り直すため（同じ位置の画像は中身も同じ）。
 
 ## 認証（OAuth）
 
