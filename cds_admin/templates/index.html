@@ -46,6 +46,34 @@
 </section>
 
 <section class="card">
+  <h2>同期先</h2>
+  {% if targets_error %}
+  <p class="msg error">{{ targets_error }}</p>
+  {% else %}
+  {% if targets %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>名前</th><th>種類</th><th>出力先</th><th>記録</th><th></th></tr></thead>
+    <tbody>
+    {% for t in targets %}
+    <tr{% if not t.active %} class="inactive"{% endif %}>
+      <td>{{ t.name }}{% if not t.active %} <span class="badge paused">この環境では同期しない</span>{% endif %}</td>
+      <td>{{ t.kind_label }}{% if t.kind == "folder" and not t.recursive %}<span class="muted small">（直下だけ）</span>{% endif %}</td>
+      <td class="wrap"><code>{{ t.output }}</code>{% if t.last_out %}<div class="muted small">前回: {{ t.last_out }}</div>{% endif %}</td>
+      <td>{% if t.last_out %}{{ t.files }} 個{% else %}<span class="muted">未同期</span>{% endif %}</td>
+      <td class="row-actions"><a href="/targets/edit?name={{ t.name | urlencode }}">編集</a> <a href="/targets/delete?name={{ t.name | urlencode }}" class="danger-link">削除</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">同期先がありません。下のボタンから追加してください。</p>
+  {% endif %}
+  <div class="actions"><a class="button" href="/targets/new?kind=folder">フォルダを追加</a><a class="button" href="/targets/new?kind=file">ファイルを追加</a></div>
+  <p class="muted small">変更は次の同期から反映されます。同期中は変更できません。</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>直近の記録</h2>
   {% if history %}
   <div class="table-wrap"><table>

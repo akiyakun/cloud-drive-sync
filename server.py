@@ -6,6 +6,7 @@
 """
 
 import argparse
+import os
 
 import uvicorn
 
@@ -17,6 +18,9 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
+    # 作るファイルの権限（管理画面が書く設定・記録も、sync.py と同じくグループのメンバーが書き換えられるように）
+    if os.environ.get("CDS_UMASK"):
+        os.umask(int(os.environ["CDS_UMASK"], 8))
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning",
                 server_header=False, proxy_headers=False, access_log=False)
 

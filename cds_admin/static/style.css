@@ -40,6 +40,13 @@ button { padding: 8px 14px; border: 1px solid var(--line); border-radius: 6px; b
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 button.danger { color: var(--error); }
 button.link { border: none; background: none; color: var(--accent); margin: 0; padding: 0; }
+a.button { display: inline-block; padding: 8px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); text-decoration: none; margin-top: 10px; }
+a.danger-link { color: var(--error); margin-left: 8px; }
+td.wrap { white-space: normal; word-break: break-all; }
+td.row-actions { text-align: right; }
+tr.inactive td { color: var(--muted); }
+.path-input { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.path-input span { word-break: break-all; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 .msg { padding: 10px 14px; border-radius: 8px; margin: 0 0 12px; background: var(--info-bg); }
 .msg.ok { background: var(--ok-bg); color: var(--ok); }

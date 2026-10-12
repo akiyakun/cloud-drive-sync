@@ -1,7 +1,7 @@
 services:
   cloud-drive-sync:
     build: .
-    image: cloud-drive-sync:0.3.1
+    image: cloud-drive-sync:0.4.0
     container_name: cloud-drive-sync
     # Admin UI (port 8000 inside) and the scheduler stay up; each sync runs as a child process
     restart: unless-stopped
@@ -14,6 +14,8 @@ services:
       TZ: Asia/Tokyo
       # Host names the admin UI accepts (DNS rebinding protection). Never use *.
       CDS_ALLOWED_HOSTS: "${CDS_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+      # Shown in the admin UI as the host-side location of /output (display only)
+      CDS_OUTPUT_LABEL: "${CDS_OUTPUT_DIR}"
     volumes:
       # Secrets: SSH-only folder outside the SMB shares, read-only
       - type: bind

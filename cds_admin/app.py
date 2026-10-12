@@ -24,7 +24,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from . import __version__
+from . import __version__, targets as target_ops
 from .notify import Notifier, is_valid_webhook, mask_webhook
 from .runner import Scheduler, SyncRunner, _status_label
 from .schedule import MAX_INTERVAL, MIN_INTERVAL, parse_daily_times, parse_interval
@@ -91,8 +91,11 @@ def _size(value):
     return f"{value:.2f} GB"
 
 
-def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=True, notifier=None):
+def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=True, notifier=None,
+               config_path=None, drive_lookup=None):
     tz = ZoneInfo(os.environ.get("TZ") or "Asia/Tokyo")
+    config_file = target_ops.ConfigFile(config_path or os.environ.get("CDS_CONFIG", "data/config.toml"))
+    drive_lookup = drive_lookup or target_ops.lookup_drive
     data_dir = Path(data_dir or os.environ.get("CDS_ADMIN_DIR", "data/dev/admin"))
     store = SettingsStore(data_dir / "admin.json")
     settings = store.load()
@@ -190,6 +193,179 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         response.delete_cookie(SESSION_COOKIE)
         return response
 
+    # --- 同期先 ---
+
+    def shown_path(config, path):
+        """出力先を、利用者が分かる場所（NAS の中の場所。CDS_OUTPUT_LABEL）で表す"""
+        if not path:
+            return None
+        root = Path(config["output_root"]).resolve()
+        label = os.environ.get("CDS_OUTPUT_LABEL") or str(root)
+        try:
+            rel = Path(path).relative_to(root).as_posix()
+        except ValueError:
+            return str(path)
+        return label if rel == "." else f"{label}/{rel}"
+
+    def targets_view():
+        """一覧に出す同期先。読めなければ (None, 理由)"""
+        try:
+            data, config = config_file.raw(), config_file.effective()
+        except (OSError, ValueError) as e:
+            return None, f"設定ファイル（{config_file.path.name}）を読めません: {type(e).__name__}: {e}"
+        rows = []
+        for kind, target in target_ops.list_targets(data):
+            info = target_ops.summarize(config, kind, target)
+            rows.append({
+                "kind": kind, "kind_label": target_ops.KIND_LABELS[kind], "name": target["name"],
+                "drive_id": target.get("folder_id" if kind == "folder" else "file_id", ""),
+                "output": target.get("output") or target["name"], "recursive": target.get("recursive", True),
+                "active": target_ops.is_active(target), "environments": target.get("environments"),
+                "last_out": shown_path(config, info["out_dir"]), "files": info["files"],
+            })
+        return rows, None
+
+    def form_page(request, session, mode, kind, values, error=None, status_code=200):
+        try:
+            config = config_file.effective()
+            label = shown_path(config, Path(config["output_root"]))
+        except (OSError, ValueError, KeyError):
+            label = "出力の土台"
+        return templates.TemplateResponse(request, "target_form.html", {
+            "csrf": session["csrf"], "mode": mode, "kind": kind, "kind_label": target_ops.KIND_LABELS[kind],
+            "values": values, "error": error, "output_label": label, "version": __version__,
+        }, status_code=status_code)
+
+    @login_required
+    async def target_new_page(request, token, session, form):
+        kind = request.query_params.get("kind")
+        if kind not in target_ops.KINDS:
+            return back()
+        return form_page(request, session, "new", kind, {"recursive": True})
+
+    @login_required
+    async def target_edit_page(request, token, session, form):
+        try:
+            kind, target = target_ops.find_target(config_file.raw(), request.query_params.get("name"))
+        except (OSError, ValueError):
+            kind = None
+        if kind is None:
+            flash(session, "error", "その同期先は見つかりません。")
+            return back()
+        return form_page(request, session, "edit", kind, {
+            "original": target["name"], "name": target["name"],
+            "drive": target.get("folder_id" if kind == "folder" else "file_id", ""),
+            "output": target.get("output", ""), "recursive": target.get("recursive", True),
+        })
+
+    @login_required
+    async def target_save(request, token, session, form):
+        original = form.get("original") or None
+        kind = form.get("kind")
+        values = {"original": original, "name": form.get("name", ""), "drive": form.get("drive", ""),
+                  "output": form.get("output", ""), "recursive": form.get("recursive") == "1"}
+        mode = "edit" if original else "new"
+        if kind not in target_ops.KINDS:
+            return back()
+
+        def fail(message):
+            return form_page(request, session, mode, kind, values, message, status_code=400)
+
+        if runner.is_running():
+            return fail("同期中は変更できません。同期が終わってから、もう一度保存してください。")
+        try:
+            data, config = config_file.raw(), config_file.effective()
+            current = None
+            if original:
+                found_kind, current = target_ops.find_target(data, original)
+                if current is None or found_kind != kind:
+                    return fail("編集していた同期先が見つかりません（ほかの画面で変更・削除されたかもしれません）。")
+            name = target_ops.parse_name(values["name"])
+            drive_id = target_ops.parse_drive_id(values["drive"])
+            output = target_ops.parse_output(values["output"])
+            target_ops.check_unique(data, name, ignore=current)
+            item = await asyncio.to_thread(drive_lookup, config, drive_id)
+            target_ops.check_drive_kind(kind, item)
+
+            id_key = "folder_id" if kind == "folder" else "file_id"
+            target = current if current is not None else {}
+            if current is None:
+                data.setdefault(target_ops.KINDS[kind], []).append(target)
+            target["name"] = name
+            if output is None:
+                target.pop("output", None)
+            else:
+                target["output"] = output
+            target[id_key] = drive_id
+            if kind == "folder":
+                target["recursive"] = values["recursive"]
+            drive_names = {name: item["name"]}
+            for other, other_id in target_ops.missing_drive_names(config, data, drive_names):
+                try:
+                    drive_names[other] = (await asyncio.to_thread(drive_lookup, config, other_id))["name"]
+                except ValueError:
+                    pass  # 読めない同期先は、同期のときに確かめる
+            target_ops.check_out_dirs(config, data, drive_names)
+
+            # Drive に問い合わせている間に、同期が始まったかもしれない
+            if runner.is_running():
+                return fail("同期が始まったため、保存しませんでした。同期が終わってから、もう一度保存してください。")
+            undo = target_ops.rename_records(config, original, name) if original and original != name else None
+            try:
+                config_file.save(data)
+            except Exception:
+                if undo:
+                    undo()
+                raise
+        except ValueError as e:
+            return fail(str(e))
+        except OSError as e:
+            return fail(f"保存できませんでした（{type(e).__name__}: {e}）")
+        flash(session, "ok", f"同期先「{name}」を保存しました（Drive 上の名前: {item.get('name')}）。次の同期から反映されます。")
+        return back()
+
+    @login_required
+    async def target_delete_page(request, token, session, form):
+        try:
+            config = config_file.effective()
+            kind, target = target_ops.find_target(config_file.raw(), request.query_params.get("name"))
+        except (OSError, ValueError):
+            kind = None
+        if kind is None:
+            flash(session, "error", "その同期先は見つかりません。")
+            return back()
+        info = target_ops.summarize(config, kind, target)
+        return templates.TemplateResponse(request, "target_delete.html", {
+            "csrf": session["csrf"], "name": target["name"], "kind_label": target_ops.KIND_LABELS[kind],
+            "out_dir": shown_path(config, info["out_dir"]), "files": info["files"], "version": __version__,
+        })
+
+    @login_required
+    async def target_delete(request, token, session, form):
+        name = form.get("name")
+        if runner.is_running():
+            flash(session, "error", "同期中は削除できません。同期が終わってから、もう一度操作してください。")
+            return back()
+        try:
+            data, config = config_file.raw(), config_file.effective()
+            kind, target = target_ops.find_target(data, name)
+            if kind is None:
+                flash(session, "error", "その同期先は見つかりません。")
+                return back()
+            data[target_ops.KINDS[kind]].remove(target)
+            config_file.save(data)
+        except (OSError, ValueError) as e:
+            flash(session, "error", f"削除できませんでした（{type(e).__name__}: {e}）")
+            return back()
+        try:
+            archived = target_ops.retire_outputs(config, kind, name)
+        except OSError as e:
+            flash(session, "warn", f"同期先「{name}」を削除しましたが、出力の退避の途中で失敗しました"
+                  f"（{type(e).__name__}）。残った出力は手で整理してください。")
+            return back()
+        flash(session, "ok", f"同期先「{name}」を削除しました。出力 {archived} 個を退避へ移しました。")
+        return back()
+
     # --- 画面 ---
 
     def status_data():
@@ -207,6 +383,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
     @login_required
     async def index(request, token, session, form):
         settings = store.load()
+        targets_rows, targets_error = targets_view()
         messages, session["flash"] = session["flash"], []
         return templates.TemplateResponse(request, "index.html", {
             "csrf": session["csrf"], "flash": messages, "settings": settings,
@@ -217,6 +394,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             "min_password": MIN_PASSWORD_LENGTH, "version": __version__,
             "archive": settings["archive"], "min_archive_gb": MIN_ARCHIVE_GB, "max_archive_gb": MAX_ARCHIVE_GB,
             "archive_info": next((r for r in runner.history() if r.get("archive")), None),
+            "targets": targets_rows, "targets_error": targets_error,
         })
 
     @login_required
@@ -353,6 +531,11 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             Route("/pause", toggle_pause, methods=["POST"]),
             Route("/schedule", save_schedule, methods=["POST"]),
             Route("/archive", save_archive, methods=["POST"]),
+            Route("/targets/new", target_new_page, methods=["GET"]),
+            Route("/targets/edit", target_edit_page, methods=["GET"]),
+            Route("/targets/save", target_save, methods=["POST"]),
+            Route("/targets/delete", target_delete_page, methods=["GET"]),
+            Route("/targets/delete", target_delete, methods=["POST"]),
             Route("/webhook", save_webhook, methods=["POST"]),
             Route("/webhook/test", test_webhook, methods=["POST"]),
             Route("/password", change_password, methods=["POST"]),

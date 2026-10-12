@@ -61,7 +61,7 @@ sudo install -o svc-cloud-drive-sync -g users -m 600 <コピー元>/token.json /
   - **個別ファイルは、ほかの同期先と同じフォルダや、フォルダの同期先の外側（親）に置ける。**フォルダの同期先の中には置けない。個別ファイルは、置き場所のフォルダの中で自分の出力にしか触らない（記録にないファイルの検査や、空のフォルダの片付けをしない）。
 - 場所の設定（`token_file`・`output_root`・`state_root`・`archive_root`）は、環境変数 `CDS_TOKEN_FILE`・`CDS_OUTPUT_ROOT`・`CDS_STATE_ROOT`・`CDS_ARCHIVE_ROOT` で上書きできる。`~` はホームフォルダになる。NAS のコンテナでは、同期先の一覧は同じ設定ファイルを使い、場所だけをコンテナの中の場所に上書きする。
 
-書き方の見本は `config.example.toml`。
+書き方の見本は `config.example.toml`。本番の同期先は、管理画面の「同期先」からも編集できる（保存すると設定ファイルは作り直され、コメントは消える。[admin.md](admin.md) の「同期先の編集」）。
 
 ## 出力
 
@@ -190,6 +190,6 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 | 定期的な自動実行・NAS への出力・Docker 化 | ✅ 済み（[管理画面](admin.md)） |
 | 同期の失敗を知らせる仕組み | ✅ 済み（Discord。[管理画面](admin.md)の「通知」） |
 | 本番環境で鍵が 7 日で切れなくなったことの確認 | 2026-10-19 以降に一度同期して確かめる |
-| 管理画面で同期先・出力先を編集する | 今は `app-data/cloud-drive-sync/config.toml` を直接編集する |
+| 管理画面で同期先・出力先を編集する | ✅ 済み（[管理画面](admin.md)の「同期先」） |
 | Slack への通知 | 今は Discord だけ |
 | 管理画面の HTTPS 化 | 今は家の中の LAN で HTTP |

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}同期先の{{ "追加" if mode == "new" else "編集" }} - CloudDrive-Sync{% endblock %}
+{% block header_actions %}<a href="/">← 戻る</a>{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>同期先の{{ "追加" if mode == "new" else "編集" }}（{{ kind_label }}）</h2>
+  {% if error %}<p class="msg error">{{ error }}</p>{% endif %}
+  <form method="post" action="/targets/save" class="target-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="kind" value="{{ kind }}">
+    {% if values.original %}<input type="hidden" name="original" value="{{ values.original }}">{% endif %}
+
+    <label for="name">名前</label>
+    <input id="name" name="name" type="text" value="{{ values.name or '' }}" maxlength="64" required>
+    <p class="muted small">管理画面で同期先を見分けるための名前です。同期の記録と退避のフォルダ名にも使います（変えると、それらの名前も変わります）。</p>
+
+    <label for="drive">Drive の{{ "フォルダ" if kind == "folder" else "ファイル" }}の URL か ID</label>
+    <input id="drive" name="drive" type="text" value="{{ values.drive or '' }}" autocomplete="off" required
+      placeholder="{{ 'https://drive.google.com/drive/folders/…' if kind == 'folder' else 'https://docs.google.com/spreadsheets/d/…' }}">
+    <p class="muted small">ブラウザで Drive の{{ "フォルダ" if kind == "folder" else "ファイル" }}を開いたときのアドレスを、そのまま貼れます。保存するときに、Drive で読めるかを確かめます。
+      {% if mode == "edit" %}別の{{ "フォルダ" if kind == "folder" else "ファイル" }}に変えると、前の{{ "フォルダ" if kind == "folder" else "ファイル" }}の出力は、次の同期で退避へ移ります。{% endif %}</p>
+
+    <label for="output">出力先</label>
+    <div class="path-input"><span class="muted">{{ output_label }}/</span>
+      <input id="output" name="output" type="text" value="{{ values.output or '' }}" placeholder="（空なら名前と同じ）" class="wide"></div>
+    <p class="muted small">AI が読む場所の中の、どこに出力するか。<code>/</code> で区切ってフォルダの中を指定できます。<code>{drive_name}</code> と書くと Drive 上の{{ "フォルダ名" if kind == "folder" else "ファイル名" }}になります（例: <code>案件A/GoogleDrive-AI/{drive_name}</code>）。
+      変えると、次の同期で今までの出力を新しい場所へ移します。
+      {% if kind == "folder" %}フォルダの同期先どうしは、同じ場所や、中に入れる形にはできません。{% else %}ファイルは、ほかの同期先と同じフォルダに置けます（フォルダの同期先の中には置けません）。{% endif %}</p>
+
+    {% if kind == "folder" %}
+    <label class="choice"><input type="checkbox" name="recursive" value="1" {% if values.recursive %}checked{% endif %}> サブフォルダの中も同期する</label>
+    {% endif %}
+
+    <div class="actions"><button type="submit" class="primary">保存</button><a class="button" href="/">やめる</a></div>
+  </form>
+</section>
+{% endblock %}

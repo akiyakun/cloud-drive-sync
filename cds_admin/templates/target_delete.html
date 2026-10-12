@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}同期先の削除 - CloudDrive-Sync{% endblock %}
+{% block header_actions %}<a href="/">← 戻る</a>{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>同期先「{{ name }}」（{{ kind_label }}）を削除しますか？</h2>
+  <ul>
+    <li>この同期先は、これからは同期しません。Drive 側は何も変わりません。</li>
+    {% if out_dir %}
+    <li>これまでの出力（記録にあるファイル {{ files }} 個分）を、AI が読まない退避フォルダ（archive）へ移します。<br><span class="muted small">今の出力先: <code>{{ out_dir }}</code></span></li>
+    <li>記録にないファイル（手で置いたものなど）は移しません。</li>
+    {% else %}
+    <li>まだ一度も同期していないので、移す出力はありません。</li>
+    {% endif %}
+    <li>退避の自動削除が ON なら、退避したものも、上限を超えたときに古い順に削除されます。</li>
+  </ul>
+  <form method="post" action="/targets/delete">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="name" value="{{ name }}">
+    <div class="actions"><button type="submit" class="danger">削除する</button><a class="button" href="/">やめる</a></div>
+  </form>
+</section>
+{% endblock %}

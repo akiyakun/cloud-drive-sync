@@ -3,6 +3,7 @@
 # 使い方: このファイルを data/config.toml という名前でコピーし、値を書き換える。
 #   mkdir -p data && cp config.example.toml data/config.toml
 # data/ は .gitignore で除外されているので、実際の ID などはそちらに書く。
+# 管理画面の「同期先」で保存すると、設定ファイルは作り直される（コメントは消え、直前の内容は config.toml.bak に残る）。
 #
 # 場所の設定（token_file / output_root / state_root / archive_root）は、環境変数で上書きできる
 # （CDS_TOKEN_FILE / CDS_OUTPUT_ROOT / CDS_STATE_ROOT / CDS_ARCHIVE_ROOT）。NAS のコンテナでは、コンテナの中の場所にする。
