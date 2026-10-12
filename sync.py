@@ -509,6 +509,10 @@ def main():
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=f"設定ファイル（既定: {DEFAULT_CONFIG}）")
     args = parser.parse_args()
 
+    # 作るファイルの権限（NAS のコンテナでは 0002 にして、グループのメンバーも書き換えられるようにする）
+    if os.environ.get("CDS_UMASK"):
+        os.umask(int(os.environ["CDS_UMASK"], 8))
+
     if not args.config.exists():
         sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
     config = load_config(args.config)
