@@ -3,9 +3,13 @@
 # 使い方: このファイルを data/config.toml という名前でコピーし、値を書き換える。
 #   mkdir -p data && cp config.example.toml data/config.toml
 # data/ は .gitignore で除外されているので、実際の ID などはそちらに書く。
+#
+# 場所の設定（token_file / output_root / state_root / archive_root）は、環境変数で上書きできる
+# （CDS_TOKEN_FILE / CDS_OUTPUT_ROOT / CDS_STATE_ROOT / CDS_ARCHIVE_ROOT）。NAS のコンテナでは、コンテナの中の場所にする。
 
-# OAuth トークンの場所（auth.py が作るファイル）
-token_file = "secrets/token.json"
+# OAuth トークンの場所（auth.py が作るファイル）。~ はホームフォルダ
+# NAS の共有フォルダの中には置かない（chmod が効かず、共有にアクセスできる人に読まれるため）
+token_file = "~/.config/cloud-drive-sync/token.json"
 
 # 同期結果の出力先の土台。同期先ごとに output_root/<output>/ の下へ保存する
 output_root = "output"
@@ -18,15 +22,25 @@ archive_root = "data/archive"
 
 # 同期するフォルダ。[[folders]] のブロックを増やせば複数フォルダを別々の設定で扱える
 [[folders]]
-name = "example"                   # 同期先の名前（同期の記録・退避のフォルダ名にも使う）
-output = "Example/GoogleDrive-AI/specs"  # 出力先（output_root から見た場所）。省略すると name と同じ
-                                   # 同期先どうしの出力先は、同じ場所・入れ子にできない（並べて置く）
+name = "example"                   # 同期先の名前（同期の記録・退避のフォルダ名にも使う。重複できない）
+output = "Example/GoogleDrive-AI/{drive_name}"  # 出力先（output_root から見た場所）。省略すると name と同じ
+                                   # {drive_name} は Drive 上のフォルダ名になる（名前が変わったら出力も引っ越す）
+                                   # フォルダの同期先どうしは、同じ場所・入れ子にできない
 folder_id = "YOUR_DRIVE_FOLDER_ID" # Drive のフォルダ URL の folders/ の後ろの文字列
 recursive = true                   # サブフォルダの中も対象にするか
 
+# 開発のときだけ同期する同期先（テストデータなど）。environments に書いた環境でだけ同期する
+# 環境は環境変数 CDS_ENV で決まる（Mac での開発は dev、NAS のコンテナは nas）
+[[folders]]
+name = "devtest"
+output = "_dev/devtest"
+folder_id = "YOUR_TEST_FOLDER_ID"
+recursive = true
+environments = ["dev"]
+
 # フォルダではなくファイルを1つだけ同期したいとき（共有されたファイルなど）
-# 出力先は output_root/<output>/ の下
+# 個別ファイルは、ほかの同期先と同じフォルダや、フォルダの同期先の外側（親）に置ける（中には置けない）
 [[files]]
 name = "example-file"              # 同期先の名前
-output = "Example/GoogleDrive-AI/shared"  # 出力先（省略すると name と同じ）
+output = "Example/GoogleDrive-AI"  # 出力先（省略すると name と同じ）
 file_id = "YOUR_DRIVE_FILE_ID"     # ファイル URL の /d/ の後ろの文字列

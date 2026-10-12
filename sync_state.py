@@ -3,6 +3,7 @@
 state/<同期先の名前>.json に、ファイルごとの記録を残す:
     {
       "converter_version": 1,
+      "out_dir": "出力先（前回の同期のとき）",
       "files": {
         "<Drive のファイル ID>": {
           "name": "Drive 上の名前",
@@ -30,6 +31,7 @@ class SyncState:
         self.path = Path(path)
         data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         self.files = data.get("files", {})
+        self.out_dir = data.get("out_dir")  # 前回の出力先。変わっていたら出力を引っ越す
         # 変換処理の版が前回と違えば、Drive 側が変わっていなくても全部作り直す
         self.version_changed = bool(self.files) and data.get("converter_version") != converter_version
         self.converter_version = converter_version
@@ -38,6 +40,7 @@ class SyncState:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "converter_version": self.converter_version,
+            "out_dir": self.out_dir,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "files": self.files,
         }
@@ -92,18 +95,35 @@ def move_outputs(out_dir, old_path, new_path, outputs, archiver):
     return moved
 
 
+def relocate_outputs(old_dir, new_dir, files):
+    """出力先が変わったとき（設定の変更や、Drive のフォルダ名の変更）に、前の出力を新しい出力先へ移す
+
+    新しい出力先に同じ名前のものがあれば上書きせず、そのままにする（次の同期で作り直される）。戻り値は移した数。
+    """
+    old_dir, new_dir = Path(old_dir), Path(new_dir)
+    moved = 0
+    for entry in files.values():
+        for rel in entry.get("outputs", []):
+            src, dst = old_dir / rel, new_dir / rel
+            if src.exists() and not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                moved += 1
+    return moved
+
+
 def outputs_exist(out_dir, outputs):
     return all((Path(out_dir) / rel).exists() for rel in outputs)
 
 
-def remove_empty_dirs(out_dir):
-    """移動・退避で空になったフォルダを片付ける（出力先そのものは残す）"""
+def remove_empty_dirs(out_dir, keep_root=True):
+    """移動・退避で空になったフォルダを片付ける（keep_root なら出力先そのものは残す）"""
     out_dir = Path(out_dir)
     if not out_dir.exists():
         return
     for dirpath, _, _ in sorted(os.walk(out_dir), key=lambda w: -len(w[0])):
         path = Path(dirpath)
-        if path != out_dir and not any(path.iterdir()):
+        if (path != out_dir or not keep_root) and not any(path.iterdir()):
             path.rmdir()
 
 

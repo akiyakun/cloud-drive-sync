@@ -14,11 +14,14 @@ API では作れないもの（図形描画、画像の自由な配置など）�
     python dev/make_test_data.py
 """
 
+import os
+from pathlib import Path
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-TOKEN_FILE = "secrets/token.dev.json"
+TOKEN_FILE = Path(os.environ.get("CDS_SECRETS_DIR", "~/.config/cloud-drive-sync")).expanduser() / "token.dev.json"
 
 FOLDER_NAME = "cloud-drive-sync-test"
 FOLDER_MIME = "application/vnd.google-apps.folder"

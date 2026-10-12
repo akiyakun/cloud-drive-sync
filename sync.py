@@ -37,10 +37,16 @@ from markitdown import FileConversionException, StreamInfo
 
 from list_folder import FOLDER_MIME, SHORTCUT_MIME, list_children
 from markitdown_ext import CONVERTER_VERSION, GOOGLE_DOCS_ZIP_MIME, ConversionResult, create_markitdown
-from sync_state import Archiver, SyncState, move_outputs, outputs_exist, remove_empty_dirs, untracked_files
+from sync_state import (Archiver, SyncState, move_outputs, outputs_exist, relocate_outputs,
+                        remove_empty_dirs, untracked_files)
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 DEFAULT_CONFIG = Path(os.environ.get("CDS_CONFIG", "data/config.toml"))
+# どこで動いているか（同期先の environments と比べる）。Mac での開発は dev、NAS のコンテナは nas にする
+ENVIRONMENT = os.environ.get("CDS_ENV", "dev")
+# 場所の設定は環境変数で上書きできる（NAS のコンテナでは、コンテナの中の場所にする）
+PATH_SETTINGS = {"token_file": "CDS_TOKEN_FILE", "output_root": "CDS_OUTPUT_ROOT",
+                 "state_root": "CDS_STATE_ROOT", "archive_root": "CDS_ARCHIVE_ROOT"}
 
 DOC_MIME = "application/vnd.google-apps.document"
 SHEET_MIME = "application/vnd.google-apps.spreadsheet"
@@ -293,11 +299,33 @@ def new_stats():
             "skipped": [], "failed": [], "pdf_fallback": []}
 
 
-def sync_target(service, target_name, out_dir, entries, complete, config, full):
-    """同期先 1 つ分（フォルダ 1 つ、または個別ファイル 1 つ）を同期する"""
+def load_state(config, target_name):
+    return SyncState(Path(config.get("state_root", "state")) / f"{safe_name(target_name)}.json", CONVERTER_VERSION)
+
+
+def sync_target(service, kind, target_name, out_dir, entries, complete, config, full):
+    """同期先 1 つ分（kind が folder ならフォルダ 1 つ、file なら個別ファイル 1 つ）を同期する
+
+    個別ファイルは、ほかの同期先と同じフォルダに置けるので、自分の出力以外には触らない
+    （記録にないファイルの検査や、空のフォルダの片付けをしない）。
+    """
     stats = new_stats()
-    state = SyncState(Path(config.get("state_root", "state")) / f"{safe_name(target_name)}.json", CONVERTER_VERSION)
+    state = load_state(config, target_name)
     archiver = Archiver(config.get("archive_root", "archive"), safe_name(target_name), out_dir)
+
+    # 出力先が変わった（設定の変更や、Drive のフォルダ名の変更）: 前の出力を新しい出力先へ移す
+    if state.out_dir and Path(state.out_dir) != out_dir:
+        moved = relocate_outputs(state.out_dir, out_dir, state.files)
+        print(f"  出力先が変わったため、出力を移しました（{moved} 件）: {state.out_dir} → {out_dir}")
+        if kind == "folder":
+            remove_empty_dirs(state.out_dir, keep_root=False)
+        else:
+            try:
+                Path(state.out_dir).rmdir()  # 空になったときだけ消える（ほかのものが残っていれば何もしない）
+            except OSError:
+                pass
+    state.out_dir = str(out_dir)
+
     if state.version_changed:
         print(f"  変換処理の版が変わったため、全部作り直します（版 {CONVERTER_VERSION}）")
 
@@ -361,10 +389,11 @@ def sync_target(service, target_name, out_dir, entries, complete, config, full):
     else:
         print("  一覧を最後まで取れなかったため、Drive から消えたファイルの判断はしません")
 
-    remove_empty_dirs(out_dir)
+    if kind == "folder":
+        remove_empty_dirs(out_dir)
     state.save()
 
-    leftover = untracked_files(out_dir, state.files)
+    leftover = untracked_files(out_dir, state.files) if kind == "folder" else []
     if leftover:
         print(f"  記録にないファイルが {len(leftover)} 件あります（以前の版の出力など。不要なら手で整理してください）:")
         for rel in leftover[:5]:
@@ -388,26 +417,90 @@ def print_summary(stats):
     print()
 
 
-def target_out_dirs(config):
-    """同期先ごとの出力先を決める
+def load_config(path):
+    """設定ファイルを読む。場所の設定（PATH_SETTINGS）は環境変数で上書きでき、~ はホームフォルダにする"""
+    config = tomllib.loads(path.read_text(encoding="utf-8"))
+    for key, env in PATH_SETTINGS.items():
+        if os.environ.get(env):
+            config[key] = os.environ[env]
+        if key in config:
+            config[key] = str(Path(config[key]).expanduser())
+    return config
 
-    出力先は output_root の下の、同期先の「output」（省略時は同期先の名前）。
-    2 つの同期先が同じ場所・入れ子の場所を指すと、記録や退避が混ざるので、その場合は同期を始めずに止める。
+
+def active_targets(config):
+    """この環境（CDS_ENV）で同期する同期先。environments を書いた同期先は、そこに含まれる環境でだけ同期する"""
+    result, names = [], set()
+    for kind, key in (("folder", "folders"), ("file", "files")):
+        for target in config.get(key, []):
+            name = safe_name(target["name"])
+            if name in names:
+                sys.exit(f"設定エラー: 同期先の名前「{target['name']}」が重複しています。")
+            names.add(name)
+            environments = target.get("environments")
+            if environments is None or ENVIRONMENT in environments:
+                result.append((kind, target))
+    return result
+
+
+def resolve_out_dir(config, target, drive_name):
+    """出力先 = output_root の下の、同期先の output（省略時は同期先の名前）
+
+    output の中の {drive_name} は、Drive 上のフォルダ名・ファイル名にする。名前を取得できなかったときは None
     """
-    output_root = Path(config["output_root"])
-    targets = [("folder", t) for t in config.get("folders", [])] + [("file", t) for t in config.get("files", [])]
-    names, out_dirs = set(), []
-    for kind, target in targets:
-        name = safe_name(target["name"])
-        if name in names:
-            sys.exit(f"設定エラー: 同期先の名前「{target['name']}」が重複しています。")
-        names.add(name)
-        out_dir = (output_root / target.get("output", name)).resolve()
-        for other_name, other in out_dirs:
+    output = target.get("output", target["name"])
+    if "{drive_name}" in output:
+        if not drive_name:
+            return None
+        output = output.replace("{drive_name}", safe_name(drive_name))
+    return (Path(config["output_root"]) / output).resolve()
+
+
+def check_out_dirs(resolved):
+    """同期先どうしの出力が混ざらないか、同期を始める前に確かめる
+
+    - フォルダの同期先どうしは、同じ場所・入れ子にできない
+    - 個別ファイルは、ほかの同期先と同じフォルダや、フォルダの同期先の外側（親）に置ける。フォルダの同期先の中には置けない
+    """
+    folders = [(target["name"], out_dir) for kind, target, out_dir in resolved if kind == "folder"]
+    for i, (name, out_dir) in enumerate(folders):
+        for other_name, other in folders[i + 1:]:
             if out_dir == other or out_dir in other.parents or other in out_dir.parents:
-                sys.exit(f"設定エラー: 「{target['name']}」と「{other_name}」の出力先が同じか入れ子になっています。")
-        out_dirs.append((target["name"], out_dir))
-        yield kind, target, out_dir
+                sys.exit(f"設定エラー: 「{name}」と「{other_name}」の出力先が同じか入れ子になっています。")
+    for kind, target, out_dir in resolved:
+        if kind == "file":
+            for other_name, other in folders:
+                if out_dir == other or other in out_dir.parents:
+                    sys.exit(f"設定エラー: 個別ファイル「{target['name']}」の出力先が、フォルダの同期先「{other_name}」の中になっています。")
+
+
+def prepare_targets(service, config):
+    """同期先ごとに、Drive 上の名前を取得して出力先を決める。[(種類, 同期先, 出力先, 個別ファイルの一覧, 取れたか), ...]"""
+    prepared = []
+    for kind, target in active_targets(config):
+        if kind == "folder":
+            try:
+                drive_name = service.files().get(
+                    fileId=target["folder_id"], fields="name", supportsAllDrives=True
+                ).execute()["name"]
+            except HttpError as e:
+                print(f"=== {target['name']}: フォルダの情報を取得できないため、今回は同期しません（{describe_error(e)}） ===\n")
+                continue
+            entries, complete = None, True
+        else:
+            entries, complete = get_single_file(service, target["file_id"])
+            drive_name = entries[0][0]["name"] if entries else None
+        out_dir = resolve_out_dir(config, target, drive_name)
+        if out_dir is None:
+            # 名前を取得できない（消えた・通信エラー）ときは、前回の出力先のまま扱う
+            previous = load_state(config, target["name"]).out_dir
+            if not previous:
+                print(f"=== {target['name']}: 出力先を決められないため、今回は同期しません ===\n")
+                continue
+            out_dir = Path(previous)
+        prepared.append((kind, target, out_dir, entries, complete))
+    check_out_dirs([(kind, target, out_dir) for kind, target, out_dir, _, _ in prepared])
+    return prepared
 
 
 def main():
@@ -418,20 +511,19 @@ def main():
 
     if not args.config.exists():
         sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
-    config = tomllib.loads(args.config.read_text(encoding="utf-8"))
-    targets = list(target_out_dirs(config))  # 設定の誤りは、同期を始める前に見つける
+    config = load_config(args.config)
+    active_targets(config)  # 名前の重複などの誤りは、Drive につなぐ前に見つける
 
     creds = Credentials.from_authorized_user_file(config["token_file"], SCOPES)
     service = build("drive", "v3", credentials=creds)
 
-    for kind, target, out_dir in targets:
+    for kind, target, out_dir, entries, complete in prepare_targets(service, config):
         if kind == "folder":
             print(f"=== {target['name']} → {out_dir} ===")
             entries, complete = list_tree(service, target["folder_id"], target.get("recursive", True))
         else:
             print(f"=== {target['name']}（個別ファイル） → {out_dir} ===")
-            entries, complete = get_single_file(service, target["file_id"])
-        print_summary(sync_target(service, target["name"], out_dir, entries, complete, config, args.full))
+        print_summary(sync_target(service, kind, target["name"], out_dir, entries, complete, config, args.full))
 
 
 if __name__ == "__main__":

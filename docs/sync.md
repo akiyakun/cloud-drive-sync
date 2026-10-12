@@ -12,17 +12,29 @@ python sync.py --config 別の設定.toml  # 設定ファイルを指定する�
 
 ## 置き場所
 
-リポジトリは NAS の Docker 共有（Mac からは `/Volumes/docker/cloud-drive-sync`）に置く。git に入れないものは次のとおり。
+リポジトリは NAS の `dev` 共有（NAS の中では `/volume3/dev/docker/cloud-drive-sync`、Mac からは `/Volumes/dev/docker/cloud-drive-sync`）に置く。git に入れないものは次のとおり。
 
 | 場所 | 中身 | AI が読む？ |
 |---|---|---|
-| `secrets/` | `credentials.json`（OAuth クライアント）、`token.json`（同期用の鍵）、`token.dev.json`（開発用の鍵） | **読ませない** |
 | `data/config.toml` | 同期の設定 | 読まない |
 | `data/state/` | 前回の同期の記録 | 読まない |
 | `data/archive/` | Drive から消えたファイルの出力の退避先 | 読まない |
 | 出力先（`output_root` の下） | Markdown・画像など | **読む** |
 
-- **NAS の共有フォルダの中では `chmod`（ファイルごとの読み取り権限）が効かない。**誰が読めるかは、NAS 側の共有フォルダのアクセス権で決まる。`secrets/` の鍵は Docker 共有にアクセスできる人なら読めるので、Docker 共有のアクセス権は自分のアカウントだけにする。
+### 秘密（鍵）の置き場所
+
+**NAS の共有フォルダの中では `chmod`（ファイルごとの読み取り権限）が効かず、共有にアクセスできる人なら読めてしまう。**そのため、鍵は共有フォルダに置かない。
+
+| 使う場所 | 置き場所 | 中身 |
+|---|---|---|
+| NAS（コンテナ） | `/volume3/.secrets/cloud-drive-sync/`（SSH でしか入れない。持ち主はこのアプリ専用の UID/GID 28103） | `token.json` だけ（アプリの情報も含まれているので、同期にはこれだけで足りる） |
+| Mac（開発） | `~/.config/cloud-drive-sync/`（環境変数 `CDS_SECRETS_DIR` で変えられる。本人だけが読める設定） | `credentials.json`（`auth.py` 用）、`token.json`、`token.dev.json`（テストデータ作成用） |
+
+鍵を作り直したら（`python auth.py`）、NAS へは SSH で次のようにコピーする（持ち主 28103、本人だけが読める設定）。
+
+```bash
+sudo install -o 28103 -g 28103 -m 600 <コピー元>/token.json /volume3/.secrets/cloud-drive-sync/token.json
+```
 - Mac から NAS の共有フォルダを見ると、濁点などが分かれた形（Unicode の NFD）のファイル名が返る。名前を比べる処理では NFC にそろえる。
 
 ## 設定（data/config.toml）
@@ -33,12 +45,18 @@ python sync.py --config 別の設定.toml  # 設定ファイルを指定する�
 | `output_root` | 出力先の土台。AI が読む場所 |
 | `state_root` | 前回の同期の記録の置き場所（既定は `state`）。AI が読む `output_root` とは分ける |
 | `archive_root` | Drive から消えたファイルの出力の退避先（既定は `archive`）。AI が読む `output_root` の外に置く |
-| `[[folders]]` | 同期するフォルダ（`name`、`output`、`folder_id`、`recursive`） |
-| `[[files]]` | 個別に同期するファイル（`name`、`output`、`file_id`） |
+| `[[folders]]` | 同期するフォルダ（`name`、`output`、`folder_id`、`recursive`、`environments`） |
+| `[[files]]` | 個別に同期するファイル（`name`、`output`、`file_id`、`environments`） |
 
 - `name` は同期先の名前。同期の記録（`state/<name>.json`）と退避（`archive/<name>/`）のフォルダ名にも使う。重複できない。
-- `output` は出力先（`output_root` から見た場所）。省略すると `name` と同じ。例: `Example/GoogleDrive-AI/仕様書`
-- **同期先どうしの出力先は、同じ場所・入れ子にできない**（記録や退避が混ざるため）。設定に誤りがあれば、同期を始める前に止める。
+- `output` は出力先（`output_root` から見た場所）。省略すると `name` と同じ。
+  - `{drive_name}` と書くと、Drive 上のフォルダ名（ファイル名）になる。例: `Example/GoogleDrive-AI/{drive_name}`
+  - 出力先が変わったら（設定の変更や、Drive のフォルダ名の変更）、前回の出力先（記録の `out_dir`）から新しい出力先へ、出力を引っ越す。
+- `environments` を書くと、その環境でだけ同期する。環境は環境変数 `CDS_ENV`（Mac での開発は `dev`（既定）、NAS のコンテナは `nas`）。テストデータの同期先は `["dev"]` にして、AI が読む NAS の出力先には出さない。
+- 出力先の決まり（記録や退避が混ざらないように、同期を始める前に確かめる）:
+  - **フォルダの同期先どうしは、同じ場所・入れ子にできない。**
+  - **個別ファイルは、ほかの同期先と同じフォルダや、フォルダの同期先の外側（親）に置ける。**フォルダの同期先の中には置けない。個別ファイルは、置き場所のフォルダの中で自分の出力にしか触らない（記録にないファイルの検査や、空のフォルダの片付けをしない）。
+- 場所の設定（`token_file`・`output_root`・`state_root`・`archive_root`）は、環境変数 `CDS_TOKEN_FILE`・`CDS_OUTPUT_ROOT`・`CDS_STATE_ROOT`・`CDS_ARCHIVE_ROOT` で上書きできる。`~` はホームフォルダになる。NAS のコンテナでは、同期先の一覧は同じ設定ファイルを使い、場所だけをコンテナの中の場所に上書きする。
 
 書き方の見本は `config.example.toml`。
 
@@ -109,7 +127,7 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 
 ## 認証（OAuth）
 
-- 同期は `auth.py` で作る `secrets/token.json`（読み取り専用の `drive.readonly`）を使う。`token.json` は「Drive 全体を読める鍵」なので、AI が読む場所や git には置かない。
+- 同期は `auth.py` で作る `token.json`（読み取り専用の `drive.readonly`）を使う。`token.json` は「Drive 全体を読める鍵」なので、AI が読む場所・NAS の共有フォルダ・git には置かない（置き場所は「秘密（鍵）の置き場所」）。
 - Google Cloud の OAuth 同意画面は、対象ユーザー「外部」・公開ステータス「**本番環境**」（2026-10-12 に「テスト中」から切り替え）。
   - 「テスト中」のままだと、リフレッシュトークン（入館証を再発行するための鍵）が **7 日で切れ**、そのたびにブラウザでの認証が必要になる。NAS での自動実行に向かないため切り替えた。
   - 個人利用（100 人未満）なので、Google の審査は受けていない。認証のときに「確認されていないアプリ」の警告が出るのは正常。
@@ -119,7 +137,7 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
   - Google アカウントの「サードパーティ製のアプリとサービス」でアクセスを取り消した
   - 同じアプリで 100 回以上認証し直した（古いものから無効になる）
 - サービスアカウント（ロボット用のアカウント）は使わない。人から共有された資料を、ロボット用のアカウントへ共有し直せないことが多く、読めなくなるため。
-- 開発用の `dev/auth_dev.py`（`drive.file`、`secrets/token.dev.json`）も同じ仕組み。
+- 開発用の `dev/auth_dev.py`（`drive.file`、`token.dev.json`）も同じ仕組み。
 
 ## 今後の課題
 
