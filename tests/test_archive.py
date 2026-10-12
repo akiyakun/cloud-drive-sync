@@ -6,10 +6,12 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sync import clean_archive  # noqa: E402
 from sync_state import prune_archive  # noqa: E402
 
 
@@ -62,6 +64,34 @@ class PruneArchiveTests(unittest.TestCase):
 
     def test_missing_root(self):
         self.assertEqual(prune_archive(self.root, 10)["size"], 0)
+
+
+
+class CleanArchiveTests(unittest.TestCase):
+    """sync.py の同期のあとの処理（--archive-max-mb の MB を、今回の同期の開始を残して適用する）"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "archive"
+        for rel, size in [("a/20261001-090000/x.bin", 2 * 1024 * 1024), ("a/20261012-180005/y.bin", 2 * 1024 * 1024)]:
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_bytes(b"x" * size)
+        self.config = {"archive_root": str(self.root)}
+        self.started = datetime(2026, 10, 12, 18, 0, 0)  # 2 つ目は、この同期で退避したもの
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_limit_in_mb_keeps_this_run(self):
+        errors = []
+        result = clean_archive(self.config, 1, self.started, errors)
+        self.assertEqual((result["removed"], result["size"], errors), (1, 2 * 1024 * 1024, []))
+        self.assertTrue((self.root / "a/20261012-180005/y.bin").exists())
+
+    def test_without_limit_only_measures(self):
+        for limit in (None, 0, -5):
+            result = clean_archive(self.config, limit, self.started, [])
+            self.assertEqual((result["removed"], result["max_bytes"]), (0, None))
 
 
 if __name__ == "__main__":

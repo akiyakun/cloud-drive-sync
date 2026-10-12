@@ -140,6 +140,13 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
     def back(path="/"):
         return RedirectResponse(path, status_code=303)
 
+    async def notify_lock(reason):
+        lock = store.load()["lockout"]
+        await notifier.send(
+            f"🔒 CloudDrive-Sync: {reason}に {lock['max_failures']} 回失敗したため、"
+            f"{lock['lock_seconds'] // 60} 分間ログインを止めました。心当たりがなければ、パスワードを変更してください。"
+        )
+
     # --- ログイン ---
 
     async def login_page(request):
@@ -165,11 +172,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             return RedirectResponse("/login?error=locked", status_code=303)
         if not verify_password(form.get("password", ""), store.load()["password"]):
             if guard.record_failure():
-                lock = store.load()["lockout"]
-                await notifier.send(
-                    f"🔒 CloudDrive-Sync: 管理画面のログインに {lock['max_failures']} 回失敗したため、"
-                    f"{lock['lock_seconds'] // 60} 分間ログインを止めました。心当たりがなければ、パスワードを変更してください。"
-                )
+                await notify_lock("管理画面のログイン")
                 return RedirectResponse("/login?error=locked", status_code=303)
             await asyncio.sleep(1)  # 総当たりを遅くする
             return RedirectResponse("/login?error=password", status_code=303)
@@ -303,7 +306,17 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
     async def change_password(request, token, session, form):
         current, new, confirm = form.get("current", ""), form.get("new", ""), form.get("confirm", "")
         error = None
-        if not verify_password(current, store.load()["password"]):
+        if guard.locked_seconds_left():
+            error = "ロック中です。しばらくしてから、もう一度試してください。"
+        elif not verify_password(current, store.load()["password"]):
+            # ログインと同じ回数で数える（ログインしたままの画面を使った総当たりを防ぐ）
+            if guard.record_failure():
+                await notify_lock("パスワードの変更（今のパスワードの確認）")
+                sessions.delete(token)
+                response = RedirectResponse("/login?error=locked", status_code=303)
+                response.delete_cookie(SESSION_COOKIE)
+                return response
+            await asyncio.sleep(1)
             error = "今のパスワードが違います。"
         elif len(new) < MIN_PASSWORD_LENGTH:
             error = f"新しいパスワードは {MIN_PASSWORD_LENGTH} 文字以上にしてください。"

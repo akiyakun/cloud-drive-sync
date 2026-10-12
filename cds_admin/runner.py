@@ -85,12 +85,26 @@ class SyncRunner:
             await self._task
 
     async def _run(self, run):
+        """同期を 1 回動かして記録・通知する。途中で何が起きても、記録と通知までは必ず行う"""
+        try:
+            try:
+                summary, returncode, timed_out = await self._execute(run)
+            except Exception as e:  # noqa: BLE001 - ログが書けない・設定が読めないなど、同期を始める前の失敗
+                print(f"同期を始められませんでした: {type(e).__name__}: {e}")
+                summary, returncode, timed_out = {"fatal": f"同期を始められませんでした（{type(e).__name__}: {e}）"}, -1, False
+            await self._record(run, summary, returncode, timed_out)
+        finally:
+            self.current = None
+
+    async def _execute(self, run):
+        """sync.py を動かす。戻り値は (結果の辞書, 終了コード, 時間切れか)"""
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         summary_path = Path(tempfile.gettempdir()) / f"cds-summary-{run['id']}.json"
         timed_out = False
+        options = self.options()
         with open(self.logs_dir / f"{run['id']}.log", "wb") as log:
             process = await asyncio.create_subprocess_exec(
-                *self.command, *self.options(), "--summary", str(summary_path),
+                *self.command, *options, "--summary", str(summary_path),
                 stdout=log, stderr=asyncio.subprocess.STDOUT, env=os.environ.copy(),
             )
             try:
@@ -107,7 +121,9 @@ class SyncRunner:
             except ValueError:
                 pass
             summary_path.unlink(missing_ok=True)
+        return summary, returncode, timed_out
 
+    async def _record(self, run, summary, returncode, timed_out):
         finished = datetime.now(self.tz)
         targets = summary.get("targets", [])
         failed = [f"{t['name']}: {line}" for t in targets for line in t.get("failed", [])]
@@ -132,7 +148,14 @@ class SyncRunner:
         run["status"] = "error" if fatal else ("warning" if (failed or fallback or run["errors"]) else "ok")
 
         previous = next((r for r in self.history() if r.get("status") != "running"), None)
-        self._save_history([run] + self.history())
+        try:
+            self._save_history([run] + self.history())
+        except OSError as e:
+            # 記録を書けなくても、通知は送る（記録が残らない問題そのものを知らせるため）
+            print(f"同期の記録を保存できませんでした: {type(e).__name__}: {e}")
+            run["errors"] = run["errors"] + [f"同期の記録を保存できなかった（{type(e).__name__}）"]
+            if run["status"] == "ok":
+                run["status"] = "warning"
         self.current = None
         await self._notify(previous, run)
 
@@ -179,9 +202,14 @@ class Scheduler:
     async def check(self):
         due = self.upcoming()
         now = datetime.now(self.tz)
-        if due is None or now < due or self.runner.is_running():
+        if due is None or now < due:
             return
         schedule = self.store.load()["schedule"]
+        if self.runner.is_running():
+            if schedule.get("mode") == "daily":
+                # 毎日○時: 同期中に予定の時刻が来たら、その回は飛ばす（終わった直後にもう 1 回走らせない）
+                self.next_due = None
+            return
         if schedule.get("mode") != "daily":
             # ○分ごと: 予定を決めたあとに手動の同期があれば、その開始から数え直す（続けて 2 回走らないように）
             fresh = next_run(schedule, now, self.runner.last_started())

@@ -152,6 +152,17 @@ class PasswordTests(AdminTestCase):
             self.change(current, new, confirm)
             self.assertIn(expected, self.client.get("/").text)
 
+    def test_wrong_current_password_locks_like_login(self):
+        self.login()
+        for _ in range(2):
+            self.change("wrong", "goodpassword")
+        response = self.change("wrong", "goodpassword")  # 3 回目でロックし、ログアウトする
+        self.assertIn("error=locked", response.headers["location"])
+        self.assertEqual(len(self.notifier.sent), 1)
+        self.assertIn("パスワードの変更", self.notifier.sent[0])
+        self.assertEqual(self.client.get("/").status_code, 303)
+        self.assertIn("error=locked", self.login("admin").headers["location"])  # ロック中は正しくても入れない
+
     def test_change_and_login_with_new_password(self):
         self.login()
         self.change("admin", "new-password-123")
@@ -255,10 +266,10 @@ class FakeStore:
 
 class FakeRunner:
     def __init__(self):
-        self.started, self.last = [], None
+        self.started, self.last, self.running = [], None, False
 
     def is_running(self):
-        return False
+        return self.running
 
     def last_started(self):
         return self.last
@@ -294,6 +305,17 @@ class SchedulerTests(unittest.TestCase):
         scheduler.next_due = datetime.now(TZ) - timedelta(seconds=1)
         asyncio.run(scheduler.check())
         self.assertEqual(runner.started, ["schedule"])
+
+    def test_daily_slot_during_running_sync_is_skipped(self):
+        runner = FakeRunner()
+        scheduler = Scheduler(FakeStore({"mode": "daily", "daily_times": ["09:00"]}), runner, TZ)
+        scheduler.next_due = datetime.now(TZ) - timedelta(seconds=1)  # 予定の時刻になったが、手動の同期の最中
+        runner.running = True
+        asyncio.run(scheduler.check())
+        runner.running = False                                         # 手動の同期が終わった
+        asyncio.run(scheduler.check())
+        self.assertEqual(runner.started, [])                           # 続けてもう 1 回は走らない
+        self.assertGreater(scheduler.next_due, datetime.now(TZ))       # 次は明日の 09:00
 
     def test_paused_never_starts(self):
         runner = FakeRunner()
@@ -359,6 +381,15 @@ class RunnerTests(unittest.TestCase):
         self.run_once("ok")
         self.assertEqual(len(self.notifier.sent), 3)
         self.assertIn("解消", self.notifier.sent[-1])  # 直った
+
+    def test_failure_before_sync_starts_is_recorded_and_notified(self):
+        self.runner.logs_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.runner.logs_dir.write_text("ログのフォルダの場所にファイルがある")  # ログを書けない状態
+        run = self.run_once("ok")
+        self.assertEqual(run["status"], "error")
+        self.assertIn("同期を始められませんでした", run["fatal"])
+        self.assertEqual(len(self.notifier.sent), 1)
+        self.assertIsNone(self.runner.current)
 
     def test_passes_archive_limit_from_settings(self):
         from cds_admin.settings import sync_options
