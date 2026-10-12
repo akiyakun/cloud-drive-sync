@@ -14,6 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY --chmod=644 sync.py sync_state.py list_folder.py ./
 COPY markitdown_ext ./markitdown_ext
 RUN chmod -R a=rX /app && mkdir /data /output /secrets
-# Dedicated UID/GID for this app (owner of /volume3/.secrets/cloud-drive-sync on the NAS)
-USER 28103:28103
+# Non-root default. docker-compose.yaml runs it as the app's NAS user (CDS_UID / CDS_GID).
+USER 10001:10001
 CMD ["python", "sync.py"]

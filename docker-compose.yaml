@@ -5,9 +5,9 @@ services:
     container_name: cloud-drive-sync
     # Phase 1: run the sync once and exit (the scheduler and admin UI come later)
     restart: "no"
-    # UID 28103 owns the secrets dir. GID defaults to "users" (100) so the NAS user in that group
-    # can also edit/delete what the container writes (files are created group-writable via CDS_UMASK).
-    user: "28103:${CDS_GID:-100}"
+    # Run as the app's own NAS user (registered in UGOS so the shared-folder ACLs apply; it also owns
+    # the secrets dir). Files are created group-writable (CDS_UMASK) so members of CDS_GID can manage them.
+    user: "${CDS_UID:?Set CDS_UID in .env}:${CDS_GID:?Set CDS_GID in .env}"
     environment:
       TZ: Asia/Tokyo
     volumes:
@@ -20,7 +20,7 @@ services:
           create_host_path: false
       # Config, sync state and archive
       - type: bind
-        source: "${CDS_DATA_DIR:-./data}"
+        source: "${CDS_DATA_DIR:?Set CDS_DATA_DIR in .env}"
         target: /data
         bind:
           create_host_path: false

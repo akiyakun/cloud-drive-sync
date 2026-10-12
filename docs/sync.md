@@ -12,32 +12,34 @@ python sync.py --config 別の設定.toml  # 設定ファイルを指定する�
 
 ## 置き場所
 
-リポジトリは NAS の `dev` 共有（NAS の中では `/volume3/dev/docker/cloud-drive-sync`、Mac からは `/Volumes/dev/docker/cloud-drive-sync`）に置く。git に入れないものは次のとおり。
+| NAS の中の場所 | Mac から | 中身 | AI が読む？ |
+|---|---|---|---|
+| `/volume3/dev/docker/cloud-drive-sync/` | `/Volumes/dev/docker/cloud-drive-sync/` | リポジトリ（プログラム）。`data/` に **Mac での開発用**の設定（`config.toml`）・記録（`dev/state/`）・退避（`dev/archive/`） | 読まない |
+| `/volume3/app-data/cloud-drive-sync/` | `/Volumes/app-data/cloud-drive-sync/` | **本番（NAS のコンテナ）**の設定（`config.toml`）・記録（`state/`）・退避（`archive/`）。`app-data` はアプリが読み書きする共有フォルダ（ごみ箱なし） | 読まない |
+| `/volume3/shared-data/CloudDrive/` | `/Volumes/shared-data/CloudDrive/` | **本番の出力**（例: `<プロジェクト名>/GoogleDrive-AI/`） | **読む** |
+| `/volume3/.secrets/cloud-drive-sync/` | （見えない） | 本番の鍵 | 読ませない |
 
-| 場所 | 中身 | AI が読む？ |
-|---|---|---|
-| `data/config.toml` | 同期の設定 | 読まない |
-| `data/state/`、`data/archive/` | 本番（NAS のコンテナ）の同期の記録と退避先 | 読まない |
-| `data/dev/state/`、`data/dev/archive/` | Mac での開発用の同期の記録と退避先（本番と混ざらないように分ける） | 読まない |
-| 出力先（`output_root` の下） | Markdown・画像など | **読む** |
+- 設定ファイルは、本番用（`app-data`）と開発用（リポジトリの `data/`）に分ける。同期先の顔ぶれが違ってよい（テストデータは開発用だけ、本番だけに足す資料もある）ため。
+- `git` に入れないもの: `data/`、`.env`、`output/`（Mac での開発用の出力）。
 
 ### 秘密（鍵）の置き場所
 
 **NAS の共有フォルダの中では `chmod`（ファイルごとの読み取り権限）が効かず、共有にアクセスできる人なら読めてしまう。**そのため、鍵は共有フォルダに置かない。
+（逆に、共有フォルダの中は UGREEN 独自のアクセス権が優先される。「NAS の共有フォルダのアクセス権（UGREEN の ACL）」を参照）
 
 | 使う場所 | 置き場所 | 中身 |
 |---|---|---|
-| NAS（コンテナ） | `/volume3/.secrets/cloud-drive-sync/`（SSH でしか入れない。持ち主はこのアプリ専用の UID/GID 28103） | `token.json` だけ（アプリの情報も含まれているので、同期にはこれだけで足りる） |
+| NAS（コンテナ） | `/volume3/.secrets/cloud-drive-sync/`（共有フォルダの外で、SSH でしか入れない。持ち主はこのアプリ専用の NAS ユーザー `svc-cloud-drive-sync`） | `token.json` だけ（アプリの情報も含まれているので、同期にはこれだけで足りる） |
 | Mac（開発） | `~/.config/cloud-drive-sync/`（環境変数 `CDS_SECRETS_DIR` で変えられる。本人だけが読める設定） | `credentials.json`（`auth.py` 用）、`token.json`、`token.dev.json`（テストデータ作成用） |
 
-鍵を作り直したら（`python auth.py`）、NAS へは SSH で次のようにコピーする（持ち主 28103、本人だけが読める設定）。
+鍵を作り直したら（`python auth.py`）、NAS へは SSH で次のようにコピーする（持ち主は `svc-cloud-drive-sync`、本人だけが読める設定）。
 
 ```bash
-sudo install -o 28103 -g 28103 -m 600 <コピー元>/token.json /volume3/.secrets/cloud-drive-sync/token.json
+sudo install -o svc-cloud-drive-sync -g users -m 600 <コピー元>/token.json /volume3/.secrets/cloud-drive-sync/token.json
 ```
 - Mac から NAS の共有フォルダを見ると、濁点などが分かれた形（Unicode の NFD）のファイル名が返る。名前を比べる処理では NFC にそろえる。
 
-## 設定（data/config.toml）
+## 設定（config.toml）
 
 | 項目 | 内容 |
 |---|---|
@@ -129,19 +131,26 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 
 | ファイル | 内容 |
 |---|---|
-| `Dockerfile` | Python 3.12。UID/GID **28103**（`.secrets` の持ち主と同じ）で動く。コンテナの中の場所は環境変数で決める（`CDS_ENV=nas`、`/secrets/token.json`、`/data/config.toml`、`/output`、`/data/state`、`/data/archive`） |
+| `Dockerfile` | Python 3.12。実際に動かすユーザーは `docker-compose.yaml` で決める。コンテナの中の場所は環境変数で決める（`CDS_ENV=nas`、`/secrets/token.json`、`/data/config.toml`、`/output`、`/data/state`、`/data/archive`） |
 | `docker-compose.yaml` | 安全設定（読み取り専用のコンテナ、権限を全部外す、など）は MCP のリポジトリと同じ。つなぐのは次の 3 か所だけ |
-| `.env.example` | つなぐ場所の見本。`.env` にコピーして使う（git に入れない） |
+| `.env.example` | 動かすユーザーとつなぐ場所の見本。`.env` にコピーして使う（git に入れない） |
 
 | コンテナの中 | つなぐ先（`.env`） | 扱い |
 |---|---|---|
 | `/secrets` | `CDS_SECRETS_DIR`（NAS: `/volume3/.secrets/cloud-drive-sync`） | 読み取り専用 |
-| `/data` | `CDS_DATA_DIR`（既定 `./data`） | 書き込み（設定・記録・退避） |
-| `/output` | `CDS_OUTPUT_DIR`（NAS: `/volume3/ndrive/CloudDrive`） | 書き込み（AI が読む出力） |
+| `/data` | `CDS_DATA_DIR`（NAS: `/volume3/app-data/cloud-drive-sync`） | 書き込み（本番の設定・記録・退避） |
+| `/output` | `CDS_OUTPUT_DIR`（NAS: `/volume3/shared-data/CloudDrive`） | 書き込み（AI が読む出力） |
 
 - 第 1 段階（今）は、起動すると 1 回同期して終わる。定期実行と管理画面は次の段階で足す。
-- コンテナは「ユーザー 28103、グループ `CDS_GID`（既定 100 = `users`）」で動き、ファイルを**グループのメンバーも書き換えられる設定**で作る（`CDS_UMASK=0002`）。NAS のアカウントがそのグループに入っていれば、コンテナが作った出力・退避・設定を、SMB からも整理・編集できる。鍵のフォルダは持ち主 28103 だけが読める設定なので、グループを変えても読める。
-- 書き込み先（`data/`、出力の土台）は、NAS の共有フォルダの既定で誰でも書き込める（`drwxrwxrwx`）ため、コンテナ（28103）も書き込める。
+- コンテナは、このアプリ専用の NAS ユーザー `svc-cloud-drive-sync`（`CDS_UID`）・グループ `users`（`CDS_GID`）で動き、ファイルを**グループのメンバーも書き換えられる設定**で作る（`CDS_UMASK=0002`）。NAS のアカウントがそのグループに入っていれば、コンテナが作った出力・退避・設定を、SMB からも整理・編集できる。
+
+### NAS の共有フォルダのアクセス権（UGREEN の ACL）
+
+- UGREEN の共有フォルダには、ふだん見える権限（`ls` の `drwxrwxrwx` や `getfacl`）とは別に、**UGREEN 独自のアクセス権**（拡張属性 `system.ugacl_self`。`ls` の表示の最後の `+` が印）が付いていて、こちらが優先される。
+- そのため、**UGOS に登録されていない UID（例: 最初に試した 28103）は、`drwxrwxrwx` と表示されていても読み書きできない**（`PermissionError`）。
+- コンテナは、UGOS で作ったアプリ専用のユーザー（`svc-cloud-drive-sync`）で動かし、UGOS の画面で、使う共有フォルダ（`app-data`・`shared-data`）だけに読み書きを許可する。**`dev` 共有には許可しない**（ほかのリポジトリの `.env` などが読めてしまうため）。
+- UGOS の画面ではユーザーやグループの番号が見えないので、SSH で `id <ユーザー名>` を実行して調べる。
+- アプリごとにユーザーを分ける（`svc-docker` のような共通のユーザーにしない）。共通にすると、どのアプリのコンテナからも、ほかのアプリの鍵が読めてしまう。
 - Mac では OrbStack で build と動作を確かめる（Mac は arm64、NAS は x86_64 なので、本番のイメージは NAS で build する）。Mac で試すときは、`.env` の代わりに Mac の場所を書いた設定ファイルを `--env-file` で渡し、記録と出力は開発用・本番用と別の場所にする。
 - コンテナ（Python 3.12）と Mac（Python 3.13）の出力を比べ、Markdown の内容が同じことを確かめた。違いは画像のファイル名の番号だけで、これは Google が書き出すたびに番号を振り直すため（同じ位置の画像は中身も同じ）。
 
