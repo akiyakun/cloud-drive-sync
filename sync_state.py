@@ -11,7 +11,8 @@ state/<同期先の名前>.json に、ファイルごとの記録を残す:
           "path": "出力先の中の場所（拡張子なし）。例: doc/仕様書/画面仕様",
           "mimeType": "...",
           "modifiedTime": "Drive 上の最終更新日時",
-          "outputs": ["doc/仕様書/画面仕様.md", "doc/仕様書/画面仕様.images", ...]
+          "outputs": ["doc/仕様書/画面仕様.md", "doc/仕様書/画面仕様.images", ...],
+          "mode": {"converter_version": 1, "ai_markdown": true, "keep_originals": false}  // この出力を作ったときの版と出力のしかた
         }
       }
     }
@@ -58,12 +59,15 @@ class SyncState:
         data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         self.files = data.get("files", {})
         self.out_dir = data.get("out_dir")  # 前回の出力先。変わっていたら出力を引っ越す
-        # 出力のしかた（AI 用に変換するか・元のファイルも残すか）が前回と違えば、全部作り直す
+        # 出力のしかた（AI 用に変換するか・元のファイルも残すか）と変換処理の版は、ファイルごとにも記録する
+        # （files[ID]["mode"]）。前回と違うファイルだけを作り直す。ここの 2 つは、ログに出すため
         self.options = options
         self.options_changed = bool(self.files) and options is not None and data.get("options") != options
-        # 変換処理の版が前回と違えば、Drive 側が変わっていなくても全部作り直す
         self.version_changed = bool(self.files) and data.get("converter_version") != converter_version
         self.converter_version = converter_version
+        # ファイルごとの記録が無い（前の版の）ファイルは、同期先全体の記録をそのファイルのものとみなす
+        self.legacy_mode = ({"converter_version": data.get("converter_version"), **data["options"]}
+                            if data.get("options") else None)
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -58,8 +58,10 @@ class SyncModesTests(unittest.TestCase):
                 return xlsx_bytes()
             return f"{file_id}:{mime}".encode()
 
-        def fake_download(service, file_id):
-            return xlsx_bytes("アップロード") if file_id == "up1" else b"%PDF original"
+        def fake_download(service, file_id, dest):
+            Path(dest).write_bytes(self.uploads.get(file_id, b"%PDF original"))
+
+        self.uploads = {"up1": xlsx_bytes("アップロード")}
 
         def fake_doc_markdown(service, file_id, out_dir, name):
             return sync.write_markdown(out_dir, name, "# ドキュメント\n", [])
@@ -124,11 +126,64 @@ class SyncModesTests(unittest.TestCase):
         self.assertIn("進行表.xlsx", self.archived())
 
     def test_broken_uploaded_excel_keeps_original(self):
-        sync.download_media = lambda service, file_id: b"not an xlsx"
+        self.uploads["up1"] = b"not an xlsx"
         stats = self.run_sync(entries=[(item("up1", "壊れ.xlsx", sync.XLSX_MIME), "壊れ.xlsx")])
         self.assertEqual(self.files(), sorted(["壊れ.xlsx"]))
         self.assertIn("原本のまま", stats["pdf_fallback"][0])
         self.assertEqual(stats["failed"], [])
+
+    def test_failed_file_is_retried_after_rebuild(self):
+        self.run_sync(keep=True)
+        real = sync.sync_file
+
+        def flaky(service, it, *args, **kwargs):
+            return None if it["id"] == "sheet1" else real(service, it, *args, **kwargs)  # 一時的な失敗
+
+        sync.sync_file = flaky
+        try:
+            self.run_sync(keep=False)
+        finally:
+            sync.sync_file = real
+        self.assertIn("進行表.xlsx", self.files())
+        stats = self.run_sync(keep=False)  # 次の同期で、失敗したファイルだけを作り直す
+        self.assertNotIn("進行表.xlsx", self.files())
+        self.assertEqual((stats["updated"], stats["unchanged"]), (1, 4))
+
+    def test_state_from_v050_is_not_rebuilt(self):
+        # v0.5.0 の記録（同期先全体の options はあるが、ファイルごとの mode は無い）
+        self.run_sync()
+        state_path = Path(self.config["state_root"]) / "t.json"
+        data = json.loads(state_path.read_text())
+        for entry in data["files"].values():
+            del entry["mode"]
+        state_path.write_text(json.dumps(data))
+        self.assertEqual(self.run_sync()["unchanged"], 5)
+
+    def test_generated_names_do_not_overwrite_uploads(self):
+        entries = [(item("slideABCDEF1", "説明", sync.SLIDES_MIME), "説明"),
+                   (item("pdf1", "説明.PDF", "application/pdf"), "説明.PDF")]
+        names = sync.assign_names([e[0] for e in entries])
+        self.assertEqual(names, {"slideABCDEF1": "説明_slideA", "pdf1": "説明.PDF"})
+        # ぶつからなければ、名前は変えない
+        self.assertEqual(sync.assign_names([entries[0][0]]), {"slideABCDEF1": "説明"})
+
+    def test_large_uploaded_excel_is_kept_as_is(self):
+        original = sync.MAX_EXCEL_BYTES
+        sync.MAX_EXCEL_BYTES = 10
+        try:
+            stats = self.run_sync(entries=[(item("up1", "大きい.xlsx", sync.XLSX_MIME), "大きい.xlsx")])
+        finally:
+            sync.MAX_EXCEL_BYTES = original
+        self.assertEqual(self.files(), ["大きい.xlsx"])
+        self.assertIn("大きいため", stats["pdf_fallback"][0])
+        self.assertEqual([p.name for p in self.out.iterdir() if p.name.startswith(".")], [])  # 一時ファイルは残さない
+
+    def test_switching_to_ai_archives_unsupported_shortcuts(self):
+        self.run_sync(ai=False)
+        stats = self.run_sync(ai=True)
+        self.assertNotIn("アンケート.url", self.files())
+        self.assertIn("アンケート.url", self.archived())
+        self.assertEqual(stats["skipped"], ["アンケート"])
 
     def test_options_validation(self):
         self.assertEqual(sync.target_options({"name": "x"}), {"ai_markdown": True, "keep_originals": False})

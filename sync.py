@@ -83,8 +83,17 @@ def safe_name(name):
     return name or "_"
 
 
+# Google 形式のファイルから作る出力の後ろの部分（<名前>.md、<名前>.pdf など）
+DERIVED_SUFFIXES = (".md", ".images", ".pdf", ".docx", ".xlsx", ".pptx", ".url")
+
+
 def assign_names(items):
-    """フォルダ内の各アイテムに保存名を決める。同名があれば ID の先頭6文字を付けて区別する"""
+    """フォルダ内の各アイテムに保存名を決める。同名があれば ID の先頭6文字を付けて区別する
+
+    Google 形式のファイルから作る出力（例: スライド「説明」→ 説明.pdf）が、同じフォルダのアップロードされた
+    ファイル（例: 説明.pdf）と同じ名前になるときも、Google 形式のほうに ID の先頭6文字を付ける
+    （大文字・小文字の違いも同じとみなす。NAS の共有フォルダでは区別されないため）
+    """
     by_name = {}
     for item in items:
         by_name.setdefault(safe_name(item["name"]).casefold(), []).append(item)
@@ -94,6 +103,14 @@ def assign_names(items):
         for item in group:
             base = safe_name(item["name"])
             names[item["id"]] = base if len(group) == 1 else f"{base}_{item['id'][:6]}"
+
+    uploaded = {names[i["id"]].casefold() for i in items if not i["mimeType"].startswith("application/vnd.google-apps.")}
+    for item in items:
+        name = names[item["id"]]
+        if item["mimeType"].startswith("application/vnd.google-apps.") and any(
+            (name + suffix).casefold() in uploaded for suffix in DERIVED_SUFFIXES
+        ):
+            names[item["id"]] = f"{name}_{item['id'][:6]}"
     return names
 
 
@@ -188,16 +205,23 @@ def save_xlsx_markdown(out_dir, name, data):
     return write_markdown(out_dir, name, result.markdown, result.images)
 
 
-def download_media(service, file_id):
-    """Google 形式でない通常ファイル（PDF・画像など）を原本のまま取得する"""
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(
-        buf, service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    )
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return buf.getvalue()
+DOWNLOAD_CHUNK = 16 * 1024 * 1024
+# これより大きいアップロードされた Excel は、Markdown にしない（変換でメモリを使い切らないように）
+MAX_EXCEL_BYTES = 50 * 1024 * 1024
+
+
+def download_media(service, file_id, dest):
+    """Google 形式でない通常ファイル（PDF・画像・動画など）を、原本のまま dest に保存する
+
+    大きなファイルでもメモリを使い切らないように、少しずつ書き出す（コンテナのメモリには上限がある）
+    """
+    with open(dest, "wb") as fh:
+        downloader = MediaIoBaseDownload(
+            fh, service.files().get_media(fileId=file_id, supportsAllDrives=True), chunksize=DOWNLOAD_CHUNK
+        )
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
 
 
 def export(service, file_id, mime):
@@ -251,6 +275,46 @@ def shortcut_file(item):
     return f"[InternetShortcut]\r\nURL={url}\r\n".encode("utf-8")
 
 
+def save_original(service, item, out_dir, name):
+    """原本をダウンロードして保存する（一時ファイルに書いてから差し替える）"""
+    tmp = out_dir / f".{name}.download"
+    try:
+        download_media(service, item["id"], tmp)
+        os.replace(tmp, out_dir / name)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return [name]
+
+
+def save_uploaded_excel(service, item, out_dir, name, stats, shown, keep):
+    """アップロードされた Excel から Markdown を作る（名前は「<元の名前>.md」。例: 予算.xlsx.md）
+
+    作れないとき・大きすぎるときは、原本を残す（AI が読めなくても、資料が無くなるよりよい）
+    """
+    tmp = out_dir / f".{name}.download"
+    try:
+        download_media(service, item["id"], tmp)
+        size = tmp.stat().st_size
+        made = []
+        if size > MAX_EXCEL_BYTES:
+            reason = f"{size // (1024 * 1024)} MB と大きいため、Markdown にしない（上限 {MAX_EXCEL_BYTES // (1024 * 1024)} MB）"
+        else:
+            try:
+                made, reason = save_xlsx_markdown(out_dir, name, tmp.read_bytes()), None
+            except Exception as e:
+                reason = describe_error(e)
+        if reason:
+            print(f"  Markdown を作れなかったため原本のまま保存: {shown}  ({reason})")
+            stats["pdf_fallback"].append(f"{shown} → 原本のまま  ({reason})")
+            keep = True
+        if keep:
+            os.replace(tmp, out_dir / name)
+            made.append(name)
+        return made
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def sync_file(service, item, out_dir, name, stats, shown, options=DEFAULT_OPTIONS):
     """1ファイルを、出力のしかた（options）と種類に応じて書き出す
 
@@ -265,8 +329,7 @@ def sync_file(service, item, out_dir, name, stats, shown, options=DEFAULT_OPTION
             if is_google_file(item):
                 write_atomic(out_dir / f"{name}.url", shortcut_file(item))
                 return [f"{name}.url"]
-            write_atomic(out_dir / name, download_media(service, file_id))
-            return [name]
+            return save_original(service, item, out_dir, name)
 
         if mime == DOC_MIME:
             made = markdown_or_pdf(
@@ -297,23 +360,9 @@ def sync_file(service, item, out_dir, name, stats, shown, options=DEFAULT_OPTION
                 write_atomic(out_dir / f"{name}.pptx", export(service, file_id, PPTX_MIME))
                 made.append(f"{name}.pptx")
             return made
-        data = download_media(service, file_id)
         if is_excel(item):
-            # アップロードされた Excel: Markdown を作る（名前は「<元の名前>.md」。例: 予算.xlsx.md）
-            try:
-                made = save_xlsx_markdown(out_dir, name, data)
-            except Exception as e:
-                # 作れなければ、原本を残す（AI が読めなくても、資料が無くなるよりよい）
-                reason = describe_error(e)
-                print(f"  Markdown を作れなかったため原本のまま保存: {shown}  ({reason})")
-                stats["pdf_fallback"].append(f"{shown} → 原本のまま  ({reason})")
-                keep, made = True, []
-            if keep:
-                write_atomic(out_dir / name, data)
-                made.append(name)
-            return made
-        write_atomic(out_dir / name, data)
-        return [name]
+            return save_uploaded_excel(service, item, out_dir, name, stats, shown, keep)
+        return save_original(service, item, out_dir, name)
     except Exception as e:
         # 1ファイルの失敗で全体を止めない
         # （10MB を超える書き出し、ダウンロード禁止の共有ファイル、変換処理の想定外のエラーなど）
@@ -408,13 +457,22 @@ def sync_target(service, kind, target_name, out_dir, entries, complete, config, 
     if state.options_changed:
         print(f"  出力のしかたが変わったため、全部作り直します（AI 用に変換: {options['ai_markdown']}、"
               f"元のファイルも残す: {options['keep_originals']}）")
-    rebuild = full or state.version_changed or state.options_changed
+    # この出力を作ったときの版と出力のしかた。ファイルごとに記録し、違うファイルだけを作り直す
+    # （作り直しの途中で失敗したファイルも、次の同期でまた試す）
+    mode = {"converter_version": CONVERTER_VERSION, **options}
 
     seen = set()
     for item, path in entries:
         if not is_supported(item, options):
             print(f"  スキップ（未対応の種類）: {path}  [{item['mimeType']}]")
             stats["skipped"].append(path)
+            stale = state.files.pop(item["id"], None)
+            if stale:
+                # 前の出力のしかたで作った出力（例: 人が使う同期のときのショートカット）は退避する
+                for rel in stale["outputs"]:
+                    archiver.archive(rel)
+                print(f"  退避（この出力のしかたでは同期しない種類）: {stale['path']} → {archiver.base}")
+                stats["archived"] += 1
             continue
         file_id = item["id"]
         seen.add(file_id)
@@ -435,9 +493,10 @@ def sync_target(service, kind, target_name, out_dir, entries, complete, config, 
             prev is None
             or renamed
             or prev["modifiedTime"] != item["modifiedTime"]
+            or prev.get("mode", state.legacy_mode) != mode
             or not outputs_exist(out_dir, prev["outputs"])
         )
-        if not (rebuild or changed):
+        if not (full or changed):
             stats["unchanged"] += 1
             continue
 
@@ -454,7 +513,7 @@ def sync_target(service, kind, target_name, out_dir, entries, complete, config, 
 
         state.files[file_id] = {
             "name": item["name"], "path": path, "mimeType": item["mimeType"],
-            "modifiedTime": item["modifiedTime"], "outputs": outputs,
+            "modifiedTime": item["modifiedTime"], "outputs": outputs, "mode": mode,
         }
         print(f"  {'更新' if prev else '新規'}: {path}")
         stats["updated" if prev else "new"] += 1
