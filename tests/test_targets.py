@@ -167,6 +167,20 @@ class TargetPagesTests(unittest.TestCase):
         deleted = self.client.post("/targets/delete", data={"csrf": self.csrf(), "name": "案件B", "popup": "1"})
         self.assertIn("削除しました", deleted.text)
 
+    def test_drive_name_for_name_field(self):
+        self.assertEqual(targets.suggest_name("進行表"), "進行表")
+        self.assertEqual(targets.suggest_name(".隠し/資料:v2"), "隠し_資料_v2")
+        self.assertEqual(len(targets.suggest_name("あ" * 100)), 64)
+        self.assertEqual(targets.suggest_name("..."), "")
+        ok = self.client.get("/api/drive-name?kind=file&drive=https://docs.google.com/spreadsheets/d/sheetCCCCCCCCC/edit")
+        self.assertEqual(ok.json(), {"drive_name": "進行表", "name": "進行表"})
+        wrong_kind = self.client.get("/api/drive-name?kind=folder&drive=sheetCCCCCCCCC")
+        self.assertEqual(wrong_kind.status_code, 400)
+        self.assertIn("フォルダではありません", wrong_kind.json()["error"])
+        self.assertIn("見つかりません", self.client.get("/api/drive-name?drive=folderZZZZZZZZ").json()["error"])
+        self.client.cookies.clear()
+        self.assertEqual(self.client.get("/api/drive-name?drive=sheetCCCCCCCCC").status_code, 401)  # ログインが必要
+
     def test_output_root_note(self):
         page = self.client.get("/").text
         self.assertIn("CDS_OUTPUT_DIR", page)

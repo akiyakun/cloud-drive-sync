@@ -11,20 +11,24 @@
     {% if popup %}<input type="hidden" name="popup" value="1">{% endif %}
     {% if values.original %}<input type="hidden" name="original" value="{{ values.original }}">{% endif %}
 
-    <label for="name">名前</label>
-    <input id="name" name="name" type="text" value="{{ values.name or '' }}" maxlength="64" required>
-    <p class="muted small">管理画面で同期先を見分けるための名前です。同期の記録と退避のフォルダ名にも使います（変えると、それらの名前も変わります）。</p>
-
-    <label for="group">グループ</label>
-    <input id="group" name="group" type="text" value="{{ values.group or '' }}" maxlength="40" list="group-list" placeholder="（空ならグループなし）">
-    <datalist id="group-list">{% for g in groups %}<option value="{{ g }}">{% endfor %}</datalist>
-    <p class="muted small">管理画面の一覧を分けるためだけのものです（同期には関係しません）。{% if mode == "new" %}出力先が空か、グループ名のままなら、出力先の頭にグループ名を入れます。{% endif %}</p>
-
     <label for="drive">Drive の{{ "フォルダ" if kind == "folder" else "ファイル" }}の URL か ID</label>
     <input id="drive" name="drive" type="text" value="{{ values.drive or '' }}" autocomplete="off" required
       placeholder="{{ 'https://drive.google.com/drive/folders/…' if kind == 'folder' else 'https://docs.google.com/spreadsheets/d/…' }}">
     <p class="muted small">ブラウザで Drive の{{ "フォルダ" if kind == "folder" else "ファイル" }}を開いたときのアドレスを、そのまま貼れます。保存するときに、Drive で読めるかを確かめます。
       {% if mode == "edit" %}別の{{ "フォルダ" if kind == "folder" else "ファイル" }}に変えると、前の{{ "フォルダ" if kind == "folder" else "ファイル" }}の出力は、次の同期で退避へ移ります。{% endif %}</p>
+
+    <label for="name">名前</label>
+    <div class="with-button">
+      <input id="name" name="name" type="text" value="{{ values.name or '' }}" maxlength="64" required>
+      <button type="button" id="use-drive-name" data-kind="{{ kind }}">Drive の名前を使う</button>
+    </div>
+    <p class="muted small" id="drive-name-result" aria-live="polite"></p>
+    <p class="muted small">管理画面で同期先を見分けるための名前です。同期の記録と退避のフォルダ名にも使います（変えると、それらの名前も変わります）。「Drive の名前を使う」を押すと、上の URL の{{ "フォルダ名" if kind == "folder" else "ファイル名" }}を入れます。</p>
+
+    <label for="group">グループ</label>
+    <input id="group" name="group" type="text" value="{{ values.group or '' }}" maxlength="40" list="group-list" placeholder="（空ならグループなし）">
+    <datalist id="group-list">{% for g in groups %}<option value="{{ g }}">{% endfor %}</datalist>
+    <p class="muted small">管理画面の一覧を分けるためだけのものです（同期には関係しません）。{% if mode == "new" %}出力先が空か、グループ名のままなら、出力先の頭にグループ名を入れます。{% endif %}</p>
 
     <label for="output">出力先</label>
     <div class="path-input"><span class="muted">{{ output_label }}/</span>

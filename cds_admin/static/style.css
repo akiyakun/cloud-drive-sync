@@ -67,6 +67,11 @@ code { font-size: 13px; word-break: break-all; }
 pre.log { white-space: pre-wrap; word-break: break-all; font-size: 13px; background: var(--bg); padding: 12px; border-radius: 6px; max-height: 70vh; overflow: auto; }
 tr.group-row th, tr.group-row td { background: var(--info-bg); font-weight: 700; padding-top: 8px; }
 tr.group-row td { font-weight: normal; }
+table.targets tr:not(.group-row) td:first-child { padding-left: calc(8px + 1.5em); }
+.with-button { display: flex; gap: 8px; align-items: center; }
+.with-button input { flex: 1; }
+.with-button button { margin-top: 0; white-space: nowrap; }
 table.targets tbody + tbody tr.group-row th, table.targets tbody + tbody tr.group-row td { border-top: 12px solid var(--card); }
 .note { margin-top: 16px; padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 6px; font-size: 14px; }
 .note p { margin: 6px 0 0; }
+#drive-name-result:empty { display: none; }

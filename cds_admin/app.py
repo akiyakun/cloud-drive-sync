@@ -425,6 +425,22 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         })
 
     @login_required
+    async def api_drive_name(request, token, session, form):
+        """同期先の追加・編集の画面の「Drive の名前を使う」: Drive 上の名前と、同期先の名前の候補"""
+        kind = request.query_params.get("kind")
+        try:
+            drive_id = target_ops.parse_drive_id(request.query_params.get("drive"))
+            item = await asyncio.to_thread(drive_lookup, config_file.effective(), drive_id)
+            if kind in target_ops.KINDS:
+                target_ops.check_drive_kind(kind, item)
+        except (OSError, ValueError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        suggestion = target_ops.suggest_name(item.get("name"))
+        if not suggestion:
+            return JSONResponse({"error": "Drive 上の名前から、同期先の名前を作れませんでした"}, status_code=400)
+        return JSONResponse({"drive_name": item.get("name"), "name": suggestion})
+
+    @login_required
     async def api_status(request, token, session, form):
         return JSONResponse(status_data())
 
@@ -567,6 +583,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             Route("/webhook/test", test_webhook, methods=["POST"]),
             Route("/password", change_password, methods=["POST"]),
             Route("/api/status", api_status),
+            Route("/api/drive-name", api_drive_name),
             Route("/runs/{run_id}/log", run_log),
             Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
         ],

@@ -63,6 +63,12 @@ def group_names(data):
     return list(dict.fromkeys(t["group"] for _, t in list_targets(data) if t.get("group")))
 
 
+def suggest_name(drive_name):
+    """Drive 上の名前から、同期先の名前の候補を作る（使えない文字を _ にし、先頭の . を取り、長さをそろえる）"""
+    name = sync.safe_name((drive_name or "").lstrip(".")).strip()[:MAX_NAME_LENGTH].strip()
+    return name if name and name != "_" else ""
+
+
 def parse_drive_id(text):
     """Drive の URL か ID から、ID を取り出す
 

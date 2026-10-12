@@ -23,7 +23,12 @@
     link.addEventListener("click", function (event) {
       const url = new URL(link.href, location.href);
       url.searchParams.set("popup", "1");
-      const win = window.open(url.toString(), "cds-target", "popup,width=760,height=880");
+      // Center the window on the screen the browser is on
+      const width = Math.min(760, screen.availWidth), height = Math.min(880, screen.availHeight);
+      const left = Math.round((screen.availLeft || 0) + (screen.availWidth - width) / 2);
+      const top = Math.round((screen.availTop || 0) + (screen.availHeight - height) / 2);
+      const win = window.open(url.toString(), "cds-target",
+        "popup,width=" + width + ",height=" + height + ",left=" + left + ",top=" + top);
       if (win) { event.preventDefault(); win.focus(); }
     });
   });
@@ -41,6 +46,32 @@
       if (window.opener && !window.opener.closed) window.opener.location.reload();
     } catch (e) { /* the original window was navigated elsewhere */ }
     if (done.dataset.autoClose === "true") setTimeout(function () { window.close(); }, 1500);
+  }
+
+  // "Use the Drive name": look up the Drive folder/file name from the URL field and put it in the name field.
+  const useName = document.getElementById("use-drive-name");
+  if (useName) {
+    const result = document.getElementById("drive-name-result");
+    useName.addEventListener("click", async function () {
+      const drive = document.getElementById("drive").value.trim();
+      if (!drive) { result.textContent = "先に Drive の URL か ID を入れてください。"; return; }
+      useName.disabled = true;
+      result.textContent = "Drive に問い合わせています…";
+      try {
+        const query = new URLSearchParams({ drive: drive, kind: useName.dataset.kind });
+        const res = await fetch("/api/drive-name?" + query.toString(), { credentials: "same-origin", cache: "no-store" });
+        if (res.status === 401) { result.textContent = "ログインが切れました。ログインし直してください。"; return; }
+        const data = await res.json();
+        if (!res.ok) { result.textContent = data.error; return; }
+        document.getElementById("name").value = data.name;
+        result.textContent = data.name === data.drive_name ? "Drive の名前を入れました。"
+          : "Drive の名前「" + data.drive_name + "」から、使えない文字などを直して入れました。";
+      } catch (e) {
+        result.textContent = "Drive の名前を取得できませんでした。";
+      } finally {
+        useName.disabled = false;
+      }
+    });
   }
 
   // New target: put the group name at the head of the output path while the user has not edited it.
