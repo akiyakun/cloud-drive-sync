@@ -1,7 +1,7 @@
 services:
   cloud-drive-sync:
     build: .
-    image: cloud-drive-sync:0.2.0
+    image: cloud-drive-sync:0.3.0
     container_name: cloud-drive-sync
     # Admin UI (port 8000 inside) and the scheduler stay up; each sync runs as a child process
     restart: unless-stopped

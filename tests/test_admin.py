@@ -187,6 +187,17 @@ class ScheduleAndWebhookTests(AdminTestCase):
         self.client.post("/pause", data={"csrf": self.csrf(), "paused": "0"})
         self.assertFalse(self.app.state.store.load()["schedule"]["paused"])
 
+    def test_archive_setting(self):
+        self.login()
+        self.assertEqual(self.app.state.store.load()["archive"], {"enabled": False, "max_gb": 1.0})  # 既定は OFF
+        self.client.post("/archive", data={"csrf": self.csrf(), "enabled": "1", "max_gb": "2.5"})
+        self.assertEqual(self.app.state.store.load()["archive"], {"enabled": True, "max_gb": 2.5})
+        for bad in ("0", "-1", "abc", "99999"):
+            self.client.post("/archive", data={"csrf": self.csrf(), "enabled": "1", "max_gb": bad})
+            self.assertEqual(self.app.state.store.load()["archive"]["max_gb"], 2.5)
+        self.client.post("/archive", data={"csrf": self.csrf(), "max_gb": "2.5"})  # チェックを外す
+        self.assertFalse(self.app.state.store.load()["archive"]["enabled"])
+
     def test_webhook_only_discord(self):
         self.login()
         self.client.post("/webhook", data={"csrf": self.csrf(), "webhook_url": "http://192.168.0.100/hook"})
@@ -301,17 +312,21 @@ class RunnerTests(unittest.TestCase):
             import json, os, sys
             path = sys.argv[sys.argv.index("--summary") + 1]
             mode = os.environ.get("FAKE_MODE", "ok")
+            limit = sys.argv[sys.argv.index("--archive-max-mb") + 1] if "--archive-max-mb" in sys.argv else None
             target = {"name": "t", "kind": "folder", "new": 1, "updated": 0, "unchanged": 5, "moved": 0,
                       "archived": 0, "skipped": 0, "failed": ["a.md (500 err)"] if mode == "warning" else [],
                       "pdf_fallback": []}
             summary = {"targets": [] if mode == "error" else [target], "errors": [],
-                       "fatal": "Google の鍵（token.json）が無効です" if mode == "error" else None}
+                       "fatal": "Google の鍵（token.json）が無効です" if mode == "error" else None,
+                       "archive": {"size": 10, "removed": 1 if limit else 0, "removed_bytes": 5, "limit": limit}}
             open(path, "w").write(json.dumps(summary))
             print("sync output")
             sys.exit(1 if mode == "error" else 0)
         """))
         self.notifier = FakeNotifier()
-        self.runner = SyncRunner(self.tmp.name, self.notifier, [sys.executable, str(self.script)], TZ)
+        self.options = []
+        self.runner = SyncRunner(self.tmp.name, self.notifier, [sys.executable, str(self.script)], TZ,
+                                 options=lambda: self.options)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -344,6 +359,13 @@ class RunnerTests(unittest.TestCase):
         self.run_once("ok")
         self.assertEqual(len(self.notifier.sent), 3)
         self.assertIn("解消", self.notifier.sent[-1])  # 直った
+
+    def test_passes_archive_limit_from_settings(self):
+        from cds_admin.settings import sync_options
+        self.assertEqual(sync_options({"archive": {"enabled": False, "max_gb": 1.0}}), [])
+        self.options = sync_options({"archive": {"enabled": True, "max_gb": 1.5}})
+        run = self.run_once("ok")
+        self.assertEqual((run["archive"]["limit"], run["archive"]["removed"]), ("1536", 1))
 
 
 if __name__ == "__main__":

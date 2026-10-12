@@ -17,12 +17,13 @@ RUN_TIMEOUT = timedelta(hours=2)
 class SyncRunner:
     """同期の実行と記録（runs.json と logs/<実行の ID>.log）"""
 
-    def __init__(self, data_dir, notifier, command, tz):
+    def __init__(self, data_dir, notifier, command, tz, options=None):
         self.data_dir = Path(data_dir)
         self.history_path = self.data_dir / "runs.json"
         self.logs_dir = self.data_dir / "logs"
         self.notifier = notifier
         self.command = list(command)
+        self.options = options or (lambda: [])  # 実行のたびに、設定から追加の引数を作る
         self.tz = tz
         self.current = None
         self._task = None
@@ -89,7 +90,7 @@ class SyncRunner:
         timed_out = False
         with open(self.logs_dir / f"{run['id']}.log", "wb") as log:
             process = await asyncio.create_subprocess_exec(
-                *self.command, "--summary", str(summary_path),
+                *self.command, *self.options(), "--summary", str(summary_path),
                 stdout=log, stderr=asyncio.subprocess.STDOUT, env=os.environ.copy(),
             )
             try:
@@ -126,6 +127,7 @@ class SyncRunner:
             "failed": failed[:20],
             "failed_count": len(failed),
             "pdf_fallback": fallback[:20],
+            "archive": summary.get("archive"),
         })
         run["status"] = "error" if fatal else ("warning" if (failed or fallback or run["errors"]) else "ok")
 

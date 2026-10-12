@@ -12,6 +12,7 @@ PDF は、Markdown を作れなかったときだけ保険として作る。
 - 前回の同期の記録（state/）と Drive 上の最終更新日時を比べ、新しいファイル・更新されたファイルだけを処理する
 - 名前変更・移動されたファイルは、出力も新しい名前・場所へ移す
 - Drive から消えたファイルの出力は archive/ へ移す（一覧の取得に失敗したときは判断しない）
+- --archive-max-mb を付けると、archive/ の合計が上限を超えたとき、古い退避から消す
 - 変換処理の版（markitdown_ext.CONVERTER_VERSION）が変わったら、全部作り直す
 
 使い方:
@@ -19,6 +20,7 @@ PDF は、Markdown を作れなかったときだけ保険として作る。
     python sync.py --full              # 全部作り直す
     python sync.py --config 別の設定.toml
     python sync.py --summary 結果.json        # 結果を JSON で書き出す（管理画面が読む）
+    python sync.py --archive-max-mb 1024      # 退避の合計が 1024 MB を超えたら、古い退避から消す
 """
 
 import argparse
@@ -40,8 +42,8 @@ from markitdown import FileConversionException, StreamInfo
 
 from list_folder import FOLDER_MIME, SHORTCUT_MIME, list_children
 from markitdown_ext import CONVERTER_VERSION, GOOGLE_DOCS_ZIP_MIME, ConversionResult, create_markitdown
-from sync_state import (Archiver, SyncState, move_outputs, outputs_exist, relocate_outputs,
-                        remove_empty_dirs, untracked_files)
+from sync_state import (STAMP_FORMAT, Archiver, SyncState, move_outputs, outputs_exist, prune_archive,
+                        relocate_outputs, remove_empty_dirs, untracked_files)
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 DEFAULT_CONFIG = Path(os.environ.get("CDS_CONFIG", "data/config.toml"))
@@ -523,9 +525,22 @@ def describe_fatal(e):
     return describe_error(e)
 
 
+def clean_archive(config, max_mb, started, errors):
+    """退避の大きさを調べ、上限（MB）があれば超えた分を古い退避から消す。今回の同期で退避したものは消さない"""
+    max_bytes = max_mb * 1024 * 1024 if max_mb and max_mb > 0 else None
+    result = prune_archive(config.get("archive_root", "archive"), max_bytes, keep_since=started.strftime(STAMP_FORMAT))
+    if result["removed"]:
+        print(f"退避の合計が上限（{max_mb} MB）を超えたため、古い退避を {result['removed']} 回分削除しました"
+              f"（{result['removed_bytes'] / 1024 / 1024:.1f} MB）")
+    for line in result.pop("errors"):
+        errors.append(f"古い退避を削除できなかった: {line}")
+    return {**result, "max_bytes": max_bytes}
+
+
 def run(args):
     """同期を 1 回行い、結果（同期先ごとの件数・失敗・止まった理由）を辞書で返す"""
-    summary = {"started_at": datetime.now().isoformat(timespec="seconds"), "targets": [], "errors": [], "fatal": None}
+    started = datetime.now()
+    summary = {"started_at": started.isoformat(timespec="seconds"), "targets": [], "errors": [], "fatal": None}
     try:
         if not args.config.exists():
             sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
@@ -550,6 +565,7 @@ def run(args):
                 **{k: stats[k] for k in ("new", "updated", "unchanged", "moved", "archived")},
                 "skipped": len(stats["skipped"]), "failed": stats["failed"], "pdf_fallback": stats["pdf_fallback"],
             })
+        summary["archive"] = clean_archive(config, args.archive_max_mb, started, summary["errors"])
     except (Exception, SystemExit) as e:  # noqa: BLE001 - 結果に理由を残してから、もう一度投げる
         summary["fatal"] = describe_fatal(e)
         print(f"同期が止まりました: {summary['fatal']}", file=sys.stderr)
@@ -566,6 +582,8 @@ def main():
     parser.add_argument("--full", action="store_true", help="変更の有無にかかわらず全部作り直す")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=f"設定ファイル（既定: {DEFAULT_CONFIG}）")
     parser.add_argument("--summary", type=Path, help="結果を JSON で書き出す場所（管理画面が読む）")
+    parser.add_argument("--archive-max-mb", type=int, metavar="MB",
+                        help="退避（archive/）の合計の上限。超えたら古い退避から消す（既定: 消さない）")
     args = parser.parse_args()
 
     # 作るファイルの権限（NAS のコンテナでは 0002 にして、グループのメンバーも書き換えられるようにする）

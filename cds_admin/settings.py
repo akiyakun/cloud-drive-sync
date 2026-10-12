@@ -6,6 +6,7 @@ admin.json に置くもの:
 - webhook_url: Discord の Webhook URL
 - schedule: 同期のしかた（mode = interval / daily、interval_minutes、daily_times、paused）
 - lockout: ログインのロック（max_failures 回、window_seconds 秒以内に失敗したら lock_seconds 秒ロック）
+- archive: 退避の自動削除（enabled、max_gb = 合計の上限）
 """
 
 import copy
@@ -25,7 +26,30 @@ DEFAULTS = {
     "schedule": {"mode": "interval", "interval_minutes": 60, "daily_times": ["09:00"], "paused": False},
     "lockout": {"max_failures": 3, "window_seconds": 180, "lock_seconds": 900},
     "session_hours": 12,
+    "archive": {"enabled": False, "max_gb": 1.0},
 }
+
+MIN_ARCHIVE_GB = 0.1
+MAX_ARCHIVE_GB = 10000
+
+
+def parse_archive_gb(text):
+    """退避の上限（GB）の入力を確かめる"""
+    try:
+        value = round(float(str(text).strip()), 1)
+    except ValueError:
+        raise ValueError("上限は数字で入れてください") from None
+    if not MIN_ARCHIVE_GB <= value <= MAX_ARCHIVE_GB:
+        raise ValueError(f"上限は {MIN_ARCHIVE_GB}〜{MAX_ARCHIVE_GB} GB にしてください")
+    return value
+
+
+def sync_options(settings):
+    """設定から、sync.py に渡す追加の引数を作る"""
+    archive = settings["archive"]
+    if archive.get("enabled"):
+        return ["--archive-max-mb", str(int(float(archive["max_gb"]) * 1024))]
+    return []
 
 
 class SettingsStore:

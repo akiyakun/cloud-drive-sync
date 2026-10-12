@@ -29,7 +29,8 @@ from .notify import Notifier, is_valid_webhook, mask_webhook
 from .runner import Scheduler, SyncRunner, _status_label
 from .schedule import MAX_INTERVAL, MIN_INTERVAL, parse_daily_times, parse_interval
 from .security import LoginGuard, Sessions, hash_password, same_token, verify_password
-from .settings import DEFAULT_PASSWORD, SettingsStore
+from .settings import (DEFAULT_PASSWORD, MAX_ARCHIVE_GB, MIN_ARCHIVE_GB, SettingsStore, parse_archive_gb,
+                       sync_options)
 
 HERE = Path(__file__).parent
 APP_ROOT = HERE.parent
@@ -79,6 +80,17 @@ def _fmt(value):
     return value.strftime("%m/%d %H:%M")
 
 
+def _size(value):
+    """バイト数を「12.3 MB」の形にする（画面用）"""
+    if value is None:
+        return "—"
+    for unit in ("B", "KB", "MB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.2f} GB"
+
+
 def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=True, notifier=None):
     tz = ZoneInfo(os.environ.get("TZ") or "Asia/Tokyo")
     data_dir = Path(data_dir or os.environ.get("CDS_ADMIN_DIR", "data/dev/admin"))
@@ -87,12 +99,14 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
     sessions = Sessions(lifetime_seconds=int(settings["session_hours"]) * 3600)
     guard = LoginGuard(**settings["lockout"])
     notifier = notifier or Notifier(store)
-    runner = SyncRunner(data_dir, notifier, command or [sys.executable, str(APP_ROOT / "sync.py")], tz)
+    runner = SyncRunner(data_dir, notifier, command or [sys.executable, str(APP_ROOT / "sync.py")], tz,
+                        options=lambda: sync_options(store.load()))
     scheduler = Scheduler(store, runner, tz)
 
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     templates.env.filters["fmt"] = _fmt
     templates.env.filters["status_label"] = _status_label
+    templates.env.filters["size"] = _size
 
     # --- 共通の処理 ---
 
@@ -198,6 +212,8 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             "default_password": settings["password_is_default"],
             "min_interval": MIN_INTERVAL, "max_interval": MAX_INTERVAL,
             "min_password": MIN_PASSWORD_LENGTH, "version": __version__,
+            "archive": settings["archive"], "min_archive_gb": MIN_ARCHIVE_GB, "max_archive_gb": MAX_ARCHIVE_GB,
+            "archive_info": next((r for r in runner.history() if r.get("archive")), None),
         })
 
     @login_required
@@ -250,6 +266,19 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         store.update(lambda s: s["schedule"].update(change))
         scheduler.reset()
         flash(session, "ok", "同期のしかたを保存しました。")
+        return back()
+
+    @login_required
+    async def save_archive(request, token, session, form):
+        enabled = form.get("enabled") == "1"
+        try:
+            max_gb = parse_archive_gb(form.get("max_gb", ""))
+        except ValueError as e:
+            flash(session, "error", f"退避の自動削除を保存できませんでした: {e}")
+            return back()
+        store.update(lambda s: s["archive"].update({"enabled": enabled, "max_gb": max_gb}))
+        flash(session, "ok", f"退避の自動削除を ON にしました（上限 {max_gb:g} GB）。次の同期から削除します。"
+              if enabled else "退避の自動削除を OFF にしました。")
         return back()
 
     @login_required
@@ -310,6 +339,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             Route("/sync", sync_now, methods=["POST"]),
             Route("/pause", toggle_pause, methods=["POST"]),
             Route("/schedule", save_schedule, methods=["POST"]),
+            Route("/archive", save_archive, methods=["POST"]),
             Route("/webhook", save_webhook, methods=["POST"]),
             Route("/webhook/test", test_webhook, methods=["POST"]),
             Route("/password", change_password, methods=["POST"]),

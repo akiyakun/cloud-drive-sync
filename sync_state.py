@@ -16,10 +16,12 @@ state/<同期先の名前>.json に、ファイルごとの記録を残す:
     }
 
 Drive から消えたファイルの出力は、AI が読む場所（output/）の外にある archive/ へ移す（消さない）。
+退避の合計が上限を超えたら、古い退避から消せる（prune_archive。管理画面で ON にしたときだけ）。
 """
 
 import json
 import os
+import re
 import shutil
 import unicodedata
 from datetime import datetime
@@ -49,11 +51,15 @@ class SyncState:
         os.replace(tmp, self.path)
 
 
+STAMP_FORMAT = "%Y%m%d-%H%M%S"
+STAMP_PATTERN = re.compile(r"\d{8}-\d{6}")
+
+
 class Archiver:
     """出力を archive/<同期先の名前>/<実行日時>/ の下へ、出力先と同じ並びのまま移す"""
 
     def __init__(self, archive_root, target_name, out_dir):
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime(STAMP_FORMAT)
         self.base = Path(archive_root) / target_name / stamp
         self.out_dir = Path(out_dir)
 
@@ -144,3 +150,55 @@ def untracked_files(out_dir, files):
             continue
         found.append(rel)
     return found
+
+
+def dir_size(path):
+    """フォルダの中のファイルの大きさの合計（バイト）。リンクはたどらない"""
+    total = 0
+    for dirpath, _, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                pass  # 調べている間に消えたもの
+    return total
+
+
+def prune_archive(archive_root, max_bytes, keep_since=None):
+    """退避の合計が max_bytes を超えていたら、古い退避（archive/<同期先>/<実行日時>/）から順に消す
+
+    - max_bytes が None なら消さずに、大きさだけを調べる
+    - keep_since（実行日時の文字列。例 20261012-183600）より新しい退避は、上限を超えていても消さない
+      （今回の同期で退避したものを、すぐに消してしまわないため）
+    - 実行日時の形でないフォルダ・ファイルは消さない（大きさには数える）
+    戻り値: {"size": 消したあとの合計, "removed": 消した退避の数, "removed_bytes": 消した大きさ, "errors": [...]}
+    """
+    root = Path(archive_root)
+    result = {"size": 0, "removed": 0, "removed_bytes": 0, "errors": []}
+    if not root.is_dir():
+        return result
+    batches = []
+    for target in root.iterdir():
+        if not target.is_dir() or target.is_symlink():
+            continue
+        for batch in target.iterdir():
+            if batch.is_dir() and not batch.is_symlink() and STAMP_PATTERN.fullmatch(batch.name):
+                batches.append((batch.name, target.name, batch))
+    total = dir_size(root)
+    if max_bytes is not None:
+        for stamp, _, batch in sorted(batches):  # 実行日時の古い順
+            if total <= max_bytes or (keep_since and stamp >= keep_since):
+                break
+            size = dir_size(batch)
+            try:
+                shutil.rmtree(batch)
+            except OSError as e:
+                result["errors"].append(f"{batch.parent.name}/{batch.name}: {type(e).__name__}")
+                continue
+            total -= size
+            result["removed"] += 1
+            result["removed_bytes"] += size
+            if not any(batch.parent.iterdir()):
+                batch.parent.rmdir()
+    result["size"] = total
+    return result
