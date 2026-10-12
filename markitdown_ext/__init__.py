@@ -25,7 +25,12 @@ from .result import ConversionResult
 from .xlsx import XlsxConverter
 
 __plugin_interface_version__ = 1
+
+# 変換結果が変わる修正をしたら 1 つ上げる。sync.py は版が変わると、Drive 側が変わっていなくても全部作り直す
+CONVERTER_VERSION = 1
+
 __all__ = [
+    "CONVERTER_VERSION",
     "ConversionResult",
     "GOOGLE_DOCS_ZIP_MIME",
     "GoogleDocsZipConverter",

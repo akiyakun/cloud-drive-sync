@@ -10,6 +10,12 @@ token_file = "token.json"
 # 同期結果の出力先（フォルダごとに output_root/<name>/ の下へ保存する）
 output_root = "output"
 
+# 前回の同期の記録（ファイル ID・更新日時など）の置き場所。AI が読む output_root とは分ける
+state_root = "state"
+
+# Drive から消えたファイルの出力の退避先。AI が読む output_root の外に置く
+archive_root = "archive"
+
 # 同期するフォルダ。[[folders]] のブロックを増やせば複数フォルダを別々の設定で扱える
 [[folders]]
 name = "example"                   # 出力先のサブフォルダ名（英数字推奨）

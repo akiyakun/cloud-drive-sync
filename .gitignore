@@ -10,6 +10,8 @@ token.*.json
 
 # 同期・テストの出力
 output/
+state/
+archive/
 download_test.xlsx
 
 # Python
