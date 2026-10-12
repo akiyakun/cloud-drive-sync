@@ -218,7 +218,9 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         """一覧に出す同期先を、グループごとにまとめる。[(グループ名か None, [同期先, ...]), ...]。読めなければ (None, 理由)"""
         try:
             data, config = config_file.raw(), config_file.effective()
-        except (OSError, ValueError) as e:
+        except ValueError as e:
+            return None, f"{e}（直すまで同期も止まります）"
+        except OSError as e:
             return None, f"設定ファイル（{config_file.path.name}）を読めません: {type(e).__name__}: {e}"
         groups = {}
         for kind, target in target_ops.list_targets(data):
@@ -274,8 +276,8 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         popup = is_popup(request)
         try:
             kind, target = target_ops.find_target(config_file.raw(), request.query_params.get("name"))
-        except (OSError, ValueError):
-            kind = None
+        except (OSError, ValueError) as e:
+            return finish(request, session, popup, "error", str(e))
         if kind is None:
             return finish(request, session, popup, "error", "その同期先は見つかりません。")
         return form_page(request, session, "edit", kind, {
@@ -302,7 +304,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         if runner.is_running():
             return fail("同期中は変更できません。同期が終わってから、もう一度保存してください。")
         try:
-            data, config = config_file.raw(), config_file.effective()
+            (data, content), config = config_file.read(), config_file.effective()
             current = None
             if original:
                 found_kind, current = target_ops.find_target(data, original)
@@ -340,9 +342,11 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             # Drive に問い合わせている間に、同期が始まったかもしれない
             if runner.is_running():
                 return fail("同期が始まったため、保存しませんでした。同期が終わってから、もう一度保存してください。")
+            if config_file.path.read_bytes() != content:  # Drive に問い合わせている間に、ほかの画面で保存された
+                raise target_ops.ConfigChanged("設定ファイルが、ほかの画面か手で変更されました。画面を開き直して、もう一度操作してください。")
             undo = target_ops.rename_records(config, original, name) if original and original != name else None
             try:
-                config_file.save(data)
+                config_file.save(data, expected=content)
             except Exception:
                 if undo:
                     undo()
@@ -360,8 +364,8 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         try:
             config = config_file.effective()
             kind, target = target_ops.find_target(config_file.raw(), request.query_params.get("name"))
-        except (OSError, ValueError):
-            kind = None
+        except (OSError, ValueError) as e:
+            return finish(request, session, popup, "error", str(e))
         if kind is None:
             return finish(request, session, popup, "error", "その同期先は見つかりません。")
         info = target_ops.summarize(config, kind, target)
@@ -378,12 +382,12 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         if runner.is_running():
             return finish(request, session, popup, "error", "同期中は削除できません。同期が終わってから、もう一度操作してください。")
         try:
-            data, config = config_file.raw(), config_file.effective()
+            (data, content), config = config_file.read(), config_file.effective()
             kind, target = target_ops.find_target(data, name)
             if kind is None:
                 return finish(request, session, popup, "error", "その同期先は見つかりません。")
             data[target_ops.KINDS[kind]].remove(target)
-            config_file.save(data)
+            config_file.save(data, expected=content)
         except (OSError, ValueError) as e:
             return finish(request, session, popup, "error", f"削除できませんでした（{type(e).__name__}: {e}）")
         try:

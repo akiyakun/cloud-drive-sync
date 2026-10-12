@@ -181,6 +181,75 @@ class TargetPagesTests(unittest.TestCase):
         self.client.cookies.clear()
         self.assertEqual(self.client.get("/api/drive-name?drive=sheetCCCCCCCCC").status_code, 401)  # ログインが必要
 
+    def test_broken_config_keeps_admin_usable(self):
+        for broken, expected in [
+            ('[[folders]]\noutput = "x"\nfolder_id = "folderAAAAAAAA"\n', "1 つ目に name がありません"),
+            ('folders = "x"\n', "[[folders]] の書き方がおかしい"),
+            ('[[folders]\nname = \n', "書き方がおかしい"),
+            ('token_file = "t"\n', "output_root がありません"),
+        ]:
+            self.config_path.write_text(broken, encoding="utf-8")
+            page = self.client.get("/")
+            self.assertEqual(page.status_code, 200, broken)
+            self.assertIn(expected, page.text, broken)
+            self.assertIn("今すぐ同期", page.text)  # ほかの欄は使える
+            if "output_root" not in expected:  # 同期先の書き方の誤りは、編集・削除の画面でも理由を出す
+                self.assertIn(expected, self.client.get("/targets/edit?name=main&popup=1").text)
+                self.assertIn(expected, self.client.get("/targets/delete?name=main&popup=1").text)
+
+    def test_save_refused_when_file_changed_meanwhile(self):
+        config_path = self.config_path
+
+        def lookup_and_edit(config, drive_id):
+            # Drive に問い合わせている間に、ほかの画面で保存された
+            config_path.write_text(config_path.read_text() + "\n# 手で足した\n", encoding="utf-8")
+            return fake_lookup(config, drive_id)
+
+        app = create_app(data_dir=Path(self.tmp.name) / "admin2", command=[sys.executable, "-c", "pass"],
+                         allowed_hosts=["testserver"], run_scheduler=False, notifier=self.notifier,
+                         config_path=config_path, drive_lookup=lookup_and_edit)
+        with TestClient(app, follow_redirects=False) as client:
+            page = client.get("/login")
+            client.post("/login", data={"csrf": csrf_of(page.text), "password": "admin"})
+            csrf = csrf_of(client.get("/").text)
+            response = client.post("/targets/save", data={"csrf": csrf, "kind": "folder", "name": "x",
+                                                          "drive": "folderBBBBBBBB", "output": "X", "recursive": "1"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("ほかの画面か手で変更されました", response.text)
+        self.assertNotIn('name = "x"', config_path.read_text())
+        self.assertIn("手で足した", config_path.read_text())
+
+    def test_rename_undone_when_move_fails(self):
+        self.make_state("main", self.output / "Proj/AI/共有フォルダ", ["a.md"])
+        (self.archive / "main").mkdir(parents=True)
+        config = {"state_root": str(self.state), "archive_root": str(self.archive)}
+        original = targets._move
+
+        def failing_move(src, dst):
+            if src.parent == self.archive and src.name == "main":
+                raise OSError("disk error")
+            original(src, dst)
+
+        targets._move = failing_move
+        try:
+            with self.assertRaises(OSError):
+                targets.rename_records(config, "main", "renamed")
+        finally:
+            targets._move = original
+        self.assertTrue((self.state / "main.json").exists())  # 記録は元の名前に戻っている
+        self.assertFalse((self.state / "renamed.json").exists())
+
+    def test_input_with_del_char(self):
+        for parse, value in ((targets.parse_name, "a\x7fb"), (targets.parse_output, "a\x7fb")):
+            with self.assertRaises(ValueError):
+                parse(value)
+        self.assertEqual(targets.suggest_name("a\x7fb"), "ab")
+        # 64 文字で切った端が . や空白でも、保存できる名前にする
+        long_name = "あ" * 63 + ".いう"
+        suggestion = targets.suggest_name(long_name)
+        self.assertEqual(suggestion, "あ" * 63)
+        self.assertEqual(targets.parse_name(suggestion), suggestion)
+
     def test_output_root_note(self):
         page = self.client.get("/").text
         self.assertIn("CDS_OUTPUT_DIR", page)

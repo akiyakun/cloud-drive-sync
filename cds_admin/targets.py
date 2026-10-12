@@ -38,7 +38,7 @@ def parse_name(text):
         raise ValueError("名前を入れてください")
     if len(name) > MAX_NAME_LENGTH:
         raise ValueError(f"名前は {MAX_NAME_LENGTH} 文字までです")
-    if name.startswith(".") or sync.safe_name(name) != name:
+    if name.startswith(".") or sync.safe_name(name) != name or "\x7f" in name:
         raise ValueError('名前に使えない文字があります（\\ / : * ? " < > | や、先頭の . は使えません）')
     return name
 
@@ -65,8 +65,12 @@ def group_names(data):
 
 def suggest_name(drive_name):
     """Drive 上の名前から、同期先の名前の候補を作る（使えない文字を _ にし、先頭の . を取り、長さをそろえる）"""
-    name = sync.safe_name((drive_name or "").lstrip(".")).strip()[:MAX_NAME_LENGTH].strip()
-    return name if name and name != "_" else ""
+    name = sync.safe_name((drive_name or "").replace("\x7f", "").lstrip("."))[:MAX_NAME_LENGTH]
+    name = sync.safe_name(name).lstrip(".")  # 切った端の空白・. を取る
+    try:
+        return parse_name(name) if name != "_" else ""
+    except ValueError:
+        return ""
 
 
 def parse_drive_id(text):
@@ -98,7 +102,8 @@ def parse_output(text):
         return None
     for part in text.split("/"):
         plain = part.replace("{drive_name}", "x")
-        if not part or part in (".", "..") or "{" in plain or "}" in plain or sync.safe_name(plain) != plain:
+        if (not part or part in (".", "..") or "{" in plain or "}" in plain or "\x7f" in plain
+                or sync.safe_name(plain) != plain):
             raise ValueError(f"出力先の「{part}」は使えません（使えない文字か、. や .. があります。"
                              "Drive 上の名前を使うときは {drive_name} と書きます）")
     return text
@@ -142,22 +147,59 @@ def _value(value):
     raise ValueError(f"設定の値 {value!r} は書き出せない形です")
 
 
+class ConfigChanged(ValueError):
+    """読んだあとに、設定ファイルがほかの画面・手で変えられた"""
+
+
+def check_shape(data):
+    """同期先の書き方を確かめる（手で書きまちがえても、管理画面が止まらないように）。だめなら ValueError"""
+    for kind, key in KINDS.items():
+        targets = data.get(key, [])
+        if not isinstance(targets, list) or not all(isinstance(t, dict) for t in targets):
+            raise ValueError(f"[[{key}]] の書き方がおかしいです")
+        id_key = "folder_id" if kind == "folder" else "file_id"
+        for i, target in enumerate(targets, 1):
+            for field in ("name", id_key):
+                if not isinstance(target.get(field), str) or not target[field]:
+                    raise ValueError(f"[[{key}]] の {i} つ目に {field} がありません")
+            for field in ("output", "group"):
+                if field in target and not isinstance(target[field], str):
+                    raise ValueError(f"[[{key}]] の {i} つ目の {field} は文字で書いてください")
+
+
 class ConfigFile:
     def __init__(self, path):
         self.path = Path(path)
 
+    def read(self):
+        """書いてあるとおりの設定（環境変数での上書き前）と、保存の直前に変わっていないか比べるための中身"""
+        content = self.path.read_bytes()
+        try:
+            data = tomllib.loads(content.decode("utf-8"))
+            check_shape(data)
+        except (ValueError, UnicodeDecodeError) as e:
+            raise ValueError(f"設定ファイル（{self.path.name}）の書き方がおかしいです: {e}") from None
+        return data, content
+
     def raw(self):
-        """書いてあるとおりの設定（環境変数での上書き前）"""
-        return tomllib.loads(self.path.read_text(encoding="utf-8"))
+        return self.read()[0]
 
     def effective(self):
         """同期で使う設定（場所は環境変数で上書き済み）"""
-        return sync.load_config(self.path)
+        self.read()  # 書き方の確認
+        config = sync.load_config(self.path)
+        for key in ("token_file", "output_root"):
+            if not isinstance(config.get(key), str) or not config[key]:
+                raise ValueError(f"設定ファイル（{self.path.name}）に {key} がありません")
+        return config
 
-    def save(self, data):
+    def save(self, data, expected=None):
+        """設定を書き出す。expected（read() の中身）を渡すと、読んだあとにファイルが変わっていたら保存しない"""
         text = render_toml(data)
         if tomllib.loads(text) != data:  # 書き出した内容を読み直して、同じになることを確かめる
             raise ValueError("設定を正しく書き出せませんでした")
+        if expected is not None and self.path.read_bytes() != expected:
+            raise ConfigChanged("設定ファイルが、ほかの画面か手で変更されました。画面を開き直して、もう一度操作してください。")
         if self.path.exists():
             shutil.copyfile(self.path, self.path.with_name(self.path.name + ".bak"))
         tmp = self.path.with_name(f".{self.path.name}.tmp")
@@ -276,13 +318,18 @@ def rename_records(config, old, new):
         raise ValueError(f"「{old}」と「{new}」の両方の退避があるため、この名前にはできません")
     pairs = [(src, dst) for src, dst in ((state_src, state_dst), (archive_src, archive_dst)) if src.exists() and src != dst]
     done = []
-    for src, dst in pairs:
-        _move(src, dst)
-        done.append((src, dst))
 
     def undo():
         for src, dst in reversed(done):
             _move(dst, src)
+
+    try:
+        for src, dst in pairs:
+            _move(src, dst)
+            done.append((src, dst))
+    except OSError:
+        undo()  # 記録だけ名前が変わったまま残らないように、移したものを戻す
+        raise
     return undo
 
 
