@@ -18,15 +18,18 @@ PDF は、Markdown を作れなかったときだけ保険として作る。
     python sync.py                     # 変更されたファイルだけ
     python sync.py --full              # 全部作り直す
     python sync.py --config 別の設定.toml
+    python sync.py --summary 結果.json        # 結果を JSON で書き出す（管理画面が読む）
 """
 
 import argparse
 import io
+import json
 import os
 import re
 import shutil
 import sys
 import tomllib
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from google.oauth2.credentials import Credentials
@@ -474,8 +477,11 @@ def check_out_dirs(resolved):
                     sys.exit(f"設定エラー: 個別ファイル「{target['name']}」の出力先が、フォルダの同期先「{other_name}」の中になっています。")
 
 
-def prepare_targets(service, config):
-    """同期先ごとに、Drive 上の名前を取得して出力先を決める。[(種類, 同期先, 出力先, 個別ファイルの一覧, 取れたか), ...]"""
+def prepare_targets(service, config, errors):
+    """同期先ごとに、Drive 上の名前を取得して出力先を決める。[(種類, 同期先, 出力先, 個別ファイルの一覧, 取れたか), ...]
+
+    同期できない同期先があれば、理由を errors に足す
+    """
     prepared = []
     for kind, target in active_targets(config):
         if kind == "folder":
@@ -485,6 +491,7 @@ def prepare_targets(service, config):
                 ).execute()["name"]
             except HttpError as e:
                 print(f"=== {target['name']}: フォルダの情報を取得できないため、今回は同期しません（{describe_error(e)}） ===\n")
+                errors.append(f"{target['name']}: フォルダの情報を取得できない（{describe_error(e)}）")
                 continue
             entries, complete = None, True
         else:
@@ -496,6 +503,7 @@ def prepare_targets(service, config):
             previous = load_state(config, target["name"]).out_dir
             if not previous:
                 print(f"=== {target['name']}: 出力先を決められないため、今回は同期しません ===\n")
+                errors.append(f"{target['name']}: 出力先を決められない")
                 continue
             out_dir = Path(previous)
         prepared.append((kind, target, out_dir, entries, complete))
@@ -503,31 +511,67 @@ def prepare_targets(service, config):
     return prepared
 
 
+def describe_fatal(e):
+    """同期全体が止まったエラーを、利用者向けの短い文にする"""
+    text = str(e)
+    if "invalid_grant" in text:
+        return "Google の鍵（token.json）が無効です（期限切れ・取り消し）。auth.py で認証し直し、鍵を置き直してください。"
+    if isinstance(e, SystemExit):
+        return text or "設定の誤りで止まりました。"
+    if isinstance(e, FileNotFoundError):
+        return f"ファイルが見つかりません: {e.filename}"
+    return describe_error(e)
+
+
+def run(args):
+    """同期を 1 回行い、結果（同期先ごとの件数・失敗・止まった理由）を辞書で返す"""
+    summary = {"started_at": datetime.now().isoformat(timespec="seconds"), "targets": [], "errors": [], "fatal": None}
+    try:
+        if not args.config.exists():
+            sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
+        config = load_config(args.config)
+        active_targets(config)  # 名前の重複などの誤りは、Drive につなぐ前に見つける
+
+        creds = Credentials.from_authorized_user_file(config["token_file"], SCOPES)
+        service = build("drive", "v3", credentials=creds)
+
+        for kind, target, out_dir, entries, complete in prepare_targets(service, config, summary["errors"]):
+            if kind == "folder":
+                print(f"=== {target['name']} → {out_dir} ===")
+                entries, complete = list_tree(service, target["folder_id"], target.get("recursive", True))
+                if not complete:
+                    summary["errors"].append(f"{target['name']}: 一覧を最後まで取れなかった")
+            else:
+                print(f"=== {target['name']}（個別ファイル） → {out_dir} ===")
+            stats = sync_target(service, kind, target["name"], out_dir, entries, complete, config, args.full)
+            print_summary(stats)
+            summary["targets"].append({
+                "name": target["name"], "kind": kind,
+                **{k: stats[k] for k in ("new", "updated", "unchanged", "moved", "archived")},
+                "skipped": len(stats["skipped"]), "failed": stats["failed"], "pdf_fallback": stats["pdf_fallback"],
+            })
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - 結果に理由を残してから、もう一度投げる
+        summary["fatal"] = describe_fatal(e)
+        print(f"同期が止まりました: {summary['fatal']}", file=sys.stderr)
+        raise
+    finally:
+        summary["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        if args.summary:
+            args.summary.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description="Google Drive の資料を AI 向けの Markdown に同期する")
     parser.add_argument("--full", action="store_true", help="変更の有無にかかわらず全部作り直す")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=f"設定ファイル（既定: {DEFAULT_CONFIG}）")
+    parser.add_argument("--summary", type=Path, help="結果を JSON で書き出す場所（管理画面が読む）")
     args = parser.parse_args()
 
     # 作るファイルの権限（NAS のコンテナでは 0002 にして、グループのメンバーも書き換えられるようにする）
     if os.environ.get("CDS_UMASK"):
         os.umask(int(os.environ["CDS_UMASK"], 8))
-
-    if not args.config.exists():
-        sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
-    config = load_config(args.config)
-    active_targets(config)  # 名前の重複などの誤りは、Drive につなぐ前に見つける
-
-    creds = Credentials.from_authorized_user_file(config["token_file"], SCOPES)
-    service = build("drive", "v3", credentials=creds)
-
-    for kind, target, out_dir, entries, complete in prepare_targets(service, config):
-        if kind == "folder":
-            print(f"=== {target['name']} → {out_dir} ===")
-            entries, complete = list_tree(service, target["folder_id"], target.get("recursive", True))
-        else:
-            print(f"=== {target['name']}（個別ファイル） → {out_dir} ===")
-        print_summary(sync_target(service, kind, target["name"], out_dir, entries, complete, config, args.full))
+    run(args)
 
 
 if __name__ == "__main__":

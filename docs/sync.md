@@ -141,7 +141,8 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 | `/data` | `CDS_DATA_DIR`（NAS: `/volume3/app-data/cloud-drive-sync`） | 書き込み（本番の設定・記録・退避） |
 | `/output` | `CDS_OUTPUT_DIR`（NAS: `/volume3/shared-data/CloudDrive`） | 書き込み（AI が読む出力） |
 
-- 第 1 段階（今）は、起動すると 1 回同期して終わる。定期実行と管理画面は次の段階で足す。
+- コンテナは常に起動したまま（`restart: unless-stopped`）で、[管理画面](admin.md)と定期実行が動く。同期そのものは、管理画面が別のプロセス（`python sync.py`）で 1 つずつ動かす。
+- 管理画面は `CDS_BIND_IP:CDS_PORT`（NAS の LAN の IP アドレス、既定のポート 8103）だけで待ち受ける。受け付けるホスト名は `CDS_ALLOWED_HOSTS`。
 - コンテナは、このアプリ専用の NAS ユーザー `svc-cloud-drive-sync`（`CDS_UID`）・グループ `users`（`CDS_GID`）で動き、ファイルを**グループのメンバーも書き換えられる設定**で作る（`CDS_UMASK=0002`）。NAS のアカウントがそのグループに入っていれば、コンテナが作った出力・退避・設定を、SMB からも整理・編集できる。
 
 ### NAS の共有フォルダのアクセス権（UGREEN の ACL）
@@ -174,6 +175,9 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 |---|---|
 | archive の自動削除 | 設定で ON/OFF。例: archive の容量の上限（1GB など）を超えたら、古いものから自動で削除する |
 | Drive の変更通知（changes API） | 今は毎回フォルダの一覧を取って比べている。資料が大量になったら、前回からの変更だけを教えてもらう changes API への切り替えを検討する |
-| 定期的な自動実行・NAS への出力・Docker 化 | 引き継ぎ資料の⑥ |
-| 同期の失敗を知らせる仕組み | 鍵が切れたときなどに、止まったことに気づけるようにする（⑥と一緒に） |
+| 定期的な自動実行・NAS への出力・Docker 化 | ✅ 済み（[管理画面](admin.md)） |
+| 同期の失敗を知らせる仕組み | ✅ 済み（Discord。[管理画面](admin.md)の「通知」） |
 | 本番環境で鍵が 7 日で切れなくなったことの確認 | 2026-10-19 以降に一度同期して確かめる |
+| 管理画面で同期先・出力先を編集する | 今は `app-data/cloud-drive-sync/config.toml` を直接編集する |
+| Slack への通知 | 今は Discord だけ |
+| 管理画面の HTTPS 化 | 今は家の中の LAN で HTTP |

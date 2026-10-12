@@ -6,3 +6,10 @@
 !list_folder.py
 !markitdown_ext/
 !markitdown_ext/*.py
+!server.py
+!cds_admin/
+!cds_admin/*.py
+!cds_admin/templates/
+!cds_admin/templates/*.html
+!cds_admin/static/
+!cds_admin/static/*

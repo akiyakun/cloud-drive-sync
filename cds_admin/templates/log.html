@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}ログ {{ run_id }} - CloudDrive-Sync{% endblock %}
+{% block header_actions %}<a href="/">← 戻る</a>{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>同期のログ（{{ run_id }}）</h2>
+  {% if truncated %}<p class="muted">長いので、最後の部分だけを表示しています。</p>{% endif %}
+  <pre class="log">{{ text }}</pre>
+</section>
+{% endblock %}

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block header_actions %}
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="link">ログアウト</button></form>
+{% endblock %}
+{% block content %}
+
+{% if default_password %}
+<p class="msg error banner">⚠️ パスワードが初期値（admin）のままです。下の「パスワードの変更」から変更してください。</p>
+{% endif %}
+{% for m in flash %}<p class="msg {{ m.kind }}">{{ m.text }}</p>{% endfor %}
+
+<section class="card">
+  <h2>状態</h2>
+  <dl class="status" id="status" data-running="{{ 'true' if status.running else 'false' }}">
+    <dt>いまの状態</dt>
+    <dd id="state">{% if status.running %}<span class="badge running">同期中</span>（{{ status.current.started_at | fmt }} から）{% else %}<span class="badge idle">待機中</span>{% endif %}</dd>
+    <dt>自動同期</dt>
+    <dd>{% if status.paused %}<span class="badge paused">停止中</span>{% else %}<span class="badge ok">有効</span>
+      {% if schedule.mode == "daily" %}毎日 {{ schedule.daily_times | join("、") }}{% else %}{{ schedule.interval_minutes }} 分ごと{% endif %}{% endif %}</dd>
+    <dt>次の予定</dt>
+    <dd>{{ status.next_run | fmt if status.next_run else "—" }}</dd>
+    <dt>前回の同期</dt>
+    <dd>{% if status.last %}{{ status.last.finished_at | fmt }} <span class="badge {{ status.last.status }}">{{ status.last.status | status_label }}</span>{% else %}まだありません{% endif %}</dd>
+  </dl>
+  <div class="actions">
+    <form method="post" action="/sync"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="primary" id="sync-now" {% if status.running %}disabled{% endif %}>今すぐ同期</button></form>
+    <form method="post" action="/pause"><input type="hidden" name="csrf" value="{{ csrf }}">
+      {% if status.paused %}<input type="hidden" name="paused" value="0"><button type="submit">自動同期を再開</button>
+      {% else %}<input type="hidden" name="paused" value="1"><button type="submit">自動同期を止める</button>{% endif %}</form>
+  </div>
+</section>
+
+<section class="card">
+  <h2>同期のしかた</h2>
+  <p class="muted">どちらか 1 つを選びます。「自動同期を止める」と「今すぐ同期」は、どちらを選んでいても使えます。</p>
+  <form method="post" action="/schedule" class="schedule">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="choice"><input type="radio" name="mode" value="interval" {% if schedule.mode != "daily" %}checked{% endif %}>
+      <input type="number" name="interval_minutes" min="{{ min_interval }}" max="{{ max_interval }}" value="{{ schedule.interval_minutes }}" class="short"> 分ごと</label>
+    <label class="choice"><input type="radio" name="mode" value="daily" {% if schedule.mode == "daily" %}checked{% endif %}>
+      毎日 <input type="text" name="daily_times" value="{{ schedule.daily_times | join(', ') }}" placeholder="09:00, 13:00, 18:00" class="wide"> 時</label>
+    <p class="muted small">「分ごと」は {{ min_interval }}〜{{ max_interval }} 分。「毎日」は時刻をカンマで区切って複数入れられます。</p>
+    <button type="submit">保存</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>直近の記録</h2>
+  {% if history %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>開始</th><th>きっかけ</th><th>時間</th><th>結果</th><th>新規</th><th>更新</th><th>退避</th><th>失敗</th><th></th></tr></thead>
+    <tbody>
+    {% for r in history %}
+    <tr>
+      <td>{{ r.started_at | fmt }}</td>
+      <td>{{ "手動" if r.trigger == "manual" else "自動" }}</td>
+      <td>{% if r.seconds is defined %}{{ r.seconds }} 秒{% else %}—{% endif %}</td>
+      <td><span class="badge {{ r.status }}">{{ r.status | status_label }}</span></td>
+      <td>{{ r.counts.new if r.counts else "—" }}</td>
+      <td>{{ r.counts.updated if r.counts else "—" }}</td>
+      <td>{{ r.counts.archived if r.counts else "—" }}</td>
+      <td>{{ r.failed_count if r.failed_count is defined else "—" }}</td>
+      <td><a href="/runs/{{ r.id }}/log">ログ</a></td>
+    </tr>
+    {% if r.fatal or r.errors or r.failed or r.pdf_fallback %}
+    <tr class="detail"><td colspan="9">
+      {% if r.fatal %}<div class="error-text">{{ r.fatal }}</div>{% endif %}
+      {% for line in r.errors %}<div>・{{ line }}</div>{% endfor %}
+      {% for line in r.failed %}<div>・失敗: {{ line }}</div>{% endfor %}
+      {% for line in r.pdf_fallback %}<div>・PDF で代替: {{ line }}</div>{% endfor %}
+    </td></tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="muted">まだ同期していません。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>通知（Discord）</h2>
+  <p class="muted">同期の失敗が始まったとき・直ったとき、ログインのロックをしたときに通知します。</p>
+  <p>今の通知先: {% if webhook_masked %}<code>{{ webhook_masked }}</code>{% else %}<span class="muted">未設定</span>{% endif %}</p>
+  <form method="post" action="/webhook">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="webhook_url">Webhook URL</label>
+    <input id="webhook_url" name="webhook_url" type="url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off">
+    <div class="actions">
+      <button type="submit">保存</button>
+      {% if webhook_masked %}<button type="submit" name="clear" value="1" class="danger">削除</button>{% endif %}
+    </div>
+  </form>
+  {% if webhook_masked %}
+  <form method="post" action="/webhook/test"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">テスト送信</button></form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>パスワードの変更</h2>
+  <form method="post" action="/password" class="password">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="current">今のパスワード</label>
+    <input id="current" name="current" type="password" autocomplete="current-password" required>
+    <label for="new">新しいパスワード（{{ min_password }} 文字以上）</label>
+    <input id="new" name="new" type="password" autocomplete="new-password" minlength="{{ min_password }}" required>
+    <label for="confirm">新しいパスワード（確認）</label>
+    <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="{{ min_password }}" required>
+    <button type="submit">変更</button>
+  </form>
+</section>
+{% endblock %}
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}
