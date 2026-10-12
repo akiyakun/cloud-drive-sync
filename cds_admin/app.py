@@ -228,6 +228,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             groups.setdefault(target.get("group") or None, []).append({
                 "kind": kind, "kind_label": target_ops.KIND_LABELS[kind], "name": target["name"],
                 "output": target.get("output") or target["name"], "recursive": target.get("recursive", True),
+                **target_ops.options_of(target),
                 "active": target_ops.is_active(target), "environments": target.get("environments"),
                 "last_out": shown_path(config, info["out_dir"]), "files": info["files"],
             })
@@ -269,6 +270,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         # グループから追加したときは、出力先の頭にグループ名を入れておく
         return form_page(request, session, "new", kind, {
             "recursive": True, "group": group, "output": f"{group}/" if group else "",
+            **target_ops.options_of({}),
         }, is_popup(request))
 
     @login_required
@@ -284,6 +286,7 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             "original": target["name"], "name": target["name"], "group": target.get("group", ""),
             "drive": target.get("folder_id" if kind == "folder" else "file_id", ""),
             "output": target.get("output", ""), "recursive": target.get("recursive", True),
+            **target_ops.options_of(target),
         }, popup)
 
     @login_required
@@ -293,7 +296,8 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
         popup = is_popup(request, form)
         values = {"original": original, "name": form.get("name", ""), "group": form.get("group", ""),
                   "drive": form.get("drive", ""), "output": form.get("output", ""),
-                  "recursive": form.get("recursive") == "1"}
+                  "recursive": form.get("recursive") == "1",
+                  "ai_markdown": form.get("ai_markdown") == "1", "keep_originals": form.get("keep_originals") == "1"}
         mode = "edit" if original else "new"
         if kind not in target_ops.KINDS:
             return back()
@@ -331,6 +335,8 @@ def create_app(data_dir=None, command=None, allowed_hosts=None, run_scheduler=Tr
             target[id_key] = drive_id
             if kind == "folder":
                 target["recursive"] = values["recursive"]
+            target["ai_markdown"] = values["ai_markdown"]
+            target["keep_originals"] = values["keep_originals"] and values["ai_markdown"]
             drive_names = {name: item["name"]}
             for other, other_id in target_ops.missing_drive_names(config, data, drive_names):
                 try:

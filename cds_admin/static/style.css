@@ -75,3 +75,6 @@ table.targets tbody + tbody tr.group-row th, table.targets tbody + tbody tr.grou
 .note { margin-top: 16px; padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 6px; font-size: 14px; }
 .note p { margin: 6px 0 0; }
 #drive-name-result:empty { display: none; }
+fieldset.options { border: 1px solid var(--line); border-radius: 8px; padding: 4px 14px 10px; margin: 14px 0 0; }
+fieldset.options legend { padding: 0 6px; color: var(--muted); }
+.sub { margin-left: 1.8em; }

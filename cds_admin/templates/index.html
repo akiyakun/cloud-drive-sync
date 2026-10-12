@@ -52,15 +52,16 @@
   {% else %}
   {% if target_groups %}
   <div class="table-wrap"><table class="targets">
-    <thead><tr><th>名前</th><th>種類</th><th>出力先</th><th>記録</th><th></th></tr></thead>
+    <thead><tr><th>名前</th><th>種類</th><th>出力</th><th>出力先</th><th>記録</th><th></th></tr></thead>
     {% for group, rows in target_groups %}
     <tbody>
-    <tr class="group-row"><th colspan="4">{% if group %}{{ group }}{% else %}<span class="muted">グループなし</span>{% endif %}</th>
+    <tr class="group-row"><th colspan="5">{% if group %}{{ group }}{% else %}<span class="muted">グループなし</span>{% endif %}</th>
       <td class="row-actions">{% if group %}<a href="/targets/new?kind=folder&amp;group={{ group | urlencode }}" data-popup>＋フォルダ</a> <a href="/targets/new?kind=file&amp;group={{ group | urlencode }}" data-popup>＋ファイル</a>{% endif %}</td></tr>
     {% for t in rows %}
     <tr{% if not t.active %} class="inactive"{% endif %}>
       <td>{{ t.name }}{% if not t.active %} <span class="badge paused">この環境では同期しない</span>{% endif %}</td>
       <td>{{ t.kind_label }}{% if t.kind == "folder" and not t.recursive %}<span class="muted small">（直下だけ）</span>{% endif %}</td>
+      <td>{% if t.ai_markdown %}<span class="badge ok">AI 用</span>{% if t.keep_originals %}<span class="muted small">＋元のファイル</span>{% endif %}{% else %}<span class="badge">そのまま</span>{% endif %}</td>
       <td class="wrap"><code>{{ t.output }}</code>{% if t.last_out %}<div class="muted small">前回: {{ t.last_out }}</div>{% endif %}</td>
       <td>{% if t.last_out %}{{ t.files }} 個{% else %}<span class="muted">未同期</span>{% endif %}</td>
       <td class="row-actions"><a href="/targets/edit?name={{ t.name | urlencode }}" data-popup>編集</a> <a href="/targets/delete?name={{ t.name | urlencode }}" class="danger-link" data-popup>削除</a></td>
@@ -105,7 +106,7 @@
       {% if r.fatal %}<div class="error-text">{{ r.fatal }}</div>{% endif %}
       {% for line in r.errors %}<div>・{{ line }}</div>{% endfor %}
       {% for line in r.failed %}<div>・失敗: {{ line }}</div>{% endfor %}
-      {% for line in r.pdf_fallback %}<div>・PDF で代替: {{ line }}</div>{% endfor %}
+      {% for line in r.pdf_fallback %}<div>・Markdown を作れず代替: {{ line }}</div>{% endfor %}
       {% if r.archive and r.archive.removed %}<div>・退避が上限を超えたため、古い退避を {{ r.archive.removed }} 回分削除（{{ r.archive.removed_bytes | size }}）</div>{% endif %}
     </td></tr>
     {% endif %}

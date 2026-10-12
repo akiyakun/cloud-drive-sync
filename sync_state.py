@@ -4,6 +4,7 @@ state/<同期先の名前>.json に、ファイルごとの記録を残す:
     {
       "converter_version": 1,
       "out_dir": "出力先（前回の同期のとき）",
+      "options": {"ai_markdown": true, "keep_originals": false},  // 前回の同期の出力のしかた
       "files": {
         "<Drive のファイル ID>": {
           "name": "Drive 上の名前",
@@ -28,12 +29,38 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 
+def remove_tree(path):
+    """フォルダを中身ごと消す（リンクはたどらない）
+
+    Mac から NAS の共有フォルダ（SMB）を使うと、名前を変えた直後のフォルダを shutil.rmtree が
+    「リンクかもしれない」と判断して止まることがある。そのときは、中身を 1 つずつ消す
+    """
+    try:
+        shutil.rmtree(path)
+    except OSError:
+        if os.path.islink(path):
+            raise
+        for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+            for name in dirnames:
+                entry = os.path.join(dirpath, name)
+                if os.path.islink(entry):
+                    os.unlink(entry)  # フォルダへのリンクは、リンクだけを消す（先は消さない）
+                else:
+                    os.rmdir(entry)
+            for name in filenames:
+                os.unlink(os.path.join(dirpath, name))
+        os.rmdir(path)
+
+
 class SyncState:
-    def __init__(self, path, converter_version):
+    def __init__(self, path, converter_version, options=None):
         self.path = Path(path)
         data = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         self.files = data.get("files", {})
         self.out_dir = data.get("out_dir")  # 前回の出力先。変わっていたら出力を引っ越す
+        # 出力のしかた（AI 用に変換するか・元のファイルも残すか）が前回と違えば、全部作り直す
+        self.options = options
+        self.options_changed = bool(self.files) and options is not None and data.get("options") != options
         # 変換処理の版が前回と違えば、Drive 側が変わっていなくても全部作り直す
         self.version_changed = bool(self.files) and data.get("converter_version") != converter_version
         self.converter_version = converter_version
@@ -43,6 +70,7 @@ class SyncState:
         data = {
             "converter_version": self.converter_version,
             "out_dir": self.out_dir,
+            "options": self.options,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "files": self.files,
         }
@@ -191,7 +219,7 @@ def prune_archive(archive_root, max_bytes, keep_since=None):
                 break
             size = dir_size(batch)
             try:
-                shutil.rmtree(batch)
+                remove_tree(batch)
             except OSError as e:
                 result["errors"].append(f"{batch.parent.name}/{batch.name}: {type(e).__name__}")
                 continue

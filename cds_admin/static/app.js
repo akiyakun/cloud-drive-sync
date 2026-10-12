@@ -74,6 +74,16 @@
     });
   }
 
+  // "Keep originals" only applies when converting for AI
+  const ai = document.getElementById("ai_markdown");
+  const keepOriginals = document.getElementById("keep_originals");
+  if (ai && keepOriginals) {
+    ai.addEventListener("change", function () {
+      keepOriginals.disabled = !ai.checked;
+      if (!ai.checked) keepOriginals.checked = false;
+    });
+  }
+
   // New target: put the group name at the head of the output path while the user has not edited it.
   const group = document.getElementById("group");
   const output = document.querySelector("input[data-group-prefix]");

@@ -42,7 +42,7 @@ def list_children(service, folder_id):
     while True:
         result = service.files().list(
             q=f"'{folder_id}' in parents and trashed = false",
-            fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, shortcutDetails)",
+            fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, webViewLink, shortcutDetails)",
             orderBy="folder, name",
             pageSize=100,
             pageToken=page_token,

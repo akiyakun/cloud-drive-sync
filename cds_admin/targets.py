@@ -5,6 +5,8 @@
 - 同期先を削除したら、その同期先の出力を退避（archive/<名前>/<実行日時>/）へ移し、記録を消す
 - 出力先が変わったときの出力の引っ越しは、次の同期で sync.py が行う（記録の out_dir と比べる）
 - group は管理画面の一覧を分けるためだけの項目（sync.py は読まない）
+- ai_markdown（AI 用に変換するか）・keep_originals（元のファイルも残すか）は、同期先ごとの出力のしかた。
+  変えると、次の同期でその同期先を全部作り直す（sync.py が記録の options と比べる）
 """
 
 import json
@@ -165,6 +167,9 @@ def check_shape(data):
             for field in ("output", "group"):
                 if field in target and not isinstance(target[field], str):
                     raise ValueError(f"[[{key}]] の {i} つ目の {field} は文字で書いてください")
+            for field in ("recursive", "ai_markdown", "keep_originals"):
+                if field in target and not isinstance(target[field], bool):
+                    raise ValueError(f"[[{key}]] の {i} つ目の {field} は true か false で書いてください")
 
 
 class ConfigFile:
@@ -217,6 +222,13 @@ def find_target(data, name):
         if target["name"] == name:
             return kind, target
     return None, None
+
+
+def options_of(target):
+    """同期先の出力のしかた（書いていなければ既定: AI 用に変換する・元のファイルは残さない）"""
+    ai = target.get("ai_markdown", sync.DEFAULT_OPTIONS["ai_markdown"])
+    keep = target.get("keep_originals", sync.DEFAULT_OPTIONS["keep_originals"])
+    return {"ai_markdown": ai, "keep_originals": keep and ai}
 
 
 def is_active(target):

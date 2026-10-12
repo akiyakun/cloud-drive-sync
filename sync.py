@@ -1,8 +1,16 @@
 """設定ファイル（既定は data/config.toml）に書いた Drive のフォルダ・ファイルを同期する（Drive 側は変更しない）
 
+同期先ごとに、出力のしかたを選ぶ（設定の ai_markdown・keep_originals）:
+
+AI 用に変換する（ai_markdown = true。既定）:
 - Google ドキュメント → HTML 書き出しから作った Markdown（画像・図形描画は <名前>.images/ に取り出す）
-- Google スプレッドシート → XLSX と、XLSX から作った Markdown
-- Google スライド → PPTX と PDF（Markdown 化は未実装）
+- Google スプレッドシート・アップロードされた Excel（.xlsx）→ XLSX から作った Markdown
+- Google スライド → PDF（Markdown 化は未実装）
+- それ以外のファイル → 原本のまま
+- keep_originals = true なら、元のファイル（.docx・.xlsx・.pptx・アップロードされた .xlsx）も残す（既定は残さない）
+
+変換しない（ai_markdown = false。人が使う同期）:
+- Google 形式のファイル → 元のファイルを開くショートカット（<名前>.url。Windows・Mac で開ける）
 - それ以外のファイル → 原本のまま
 
 Markdown への変換は MarkItDown（＋ markitdown_ext の変換部品）で行う。
@@ -28,7 +36,6 @@ import io
 import json
 import os
 import re
-import shutil
 import sys
 import tomllib
 from datetime import datetime
@@ -43,7 +50,7 @@ from markitdown import FileConversionException, StreamInfo
 from list_folder import FOLDER_MIME, SHORTCUT_MIME, list_children
 from markitdown_ext import CONVERTER_VERSION, GOOGLE_DOCS_ZIP_MIME, ConversionResult, create_markitdown
 from sync_state import (STAMP_FORMAT, Archiver, SyncState, move_outputs, outputs_exist, prune_archive,
-                        relocate_outputs, remove_empty_dirs, untracked_files)
+                        relocate_outputs, remove_empty_dirs, remove_tree, untracked_files)
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 DEFAULT_CONFIG = Path(os.environ.get("CDS_CONFIG", "data/config.toml"))
@@ -63,6 +70,9 @@ HTML_ZIP_MIME = "application/zip"
 PDF_MIME = "application/pdf"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+XLSM_MIME = "application/vnd.ms-excel.sheet.macroEnabled.12"
+DEFAULT_OPTIONS = {"ai_markdown": True, "keep_originals": False}
 
 # NAS(SMB) や Windows でも扱えるよう、ファイル名に使えない文字を置き換える
 INVALID_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -105,7 +115,7 @@ def replace_dir(path, files):
     old = path.with_name(f".{path.name}.old")
     for leftover in (tmp, old):
         if leftover.exists():
-            shutil.rmtree(leftover)
+            remove_tree(leftover)
 
     if files:
         tmp.mkdir()
@@ -116,7 +126,7 @@ def replace_dir(path, files):
     if files:
         tmp.rename(path)
     if old.exists():
-        shutil.rmtree(old)
+        remove_tree(old)
 
 
 def write_markdown(out_dir, name, md, images):
@@ -212,45 +222,97 @@ def markdown_or_pdf(service, item, out_dir, name, make_markdown, stats, shown):
         reason = describe_error(e)
         print(f"  Markdown を作れなかったため PDF を作成: {shown}  ({reason})")
         write_atomic(out_dir / f"{name}.pdf", export(service, item["id"], PDF_MIME))
-        stats["pdf_fallback"].append(f"{shown}  ({reason})")
+        stats["pdf_fallback"].append(f"{shown} → PDF  ({reason})")
         return [f"{name}.pdf"]
 
 
-def is_supported(item):
+def is_google_file(item):
     mime = item["mimeType"]
-    return mime != SHORTCUT_MIME and (
-        not mime.startswith("application/vnd.google-apps.") or mime in SUPPORTED_GOOGLE_MIMES
-    )
+    return mime.startswith("application/vnd.google-apps.") and mime not in (FOLDER_MIME, SHORTCUT_MIME)
 
 
-def sync_file(service, item, out_dir, name, stats, shown):
-    """1ファイルを種類に応じて書き出す（Google 形式は export、それ以外は原本をダウンロード）
+def is_excel(item):
+    return item["mimeType"] in (XLSX_MIME, XLSM_MIME) or item["name"].lower().endswith((".xlsx", ".xlsm"))
+
+
+def is_supported(item, options=DEFAULT_OPTIONS):
+    """同期できる種類か。変換しない（人が使う）同期では、Google 形式はすべてショートカットにできる"""
+    mime = item["mimeType"]
+    if mime == SHORTCUT_MIME:
+        return False
+    if is_google_file(item):
+        return not options["ai_markdown"] or mime in SUPPORTED_GOOGLE_MIMES
+    return True
+
+
+def shortcut_file(item):
+    """Google 形式のファイルを開くショートカット（Windows の「インターネット ショートカット」。Mac でも開ける）"""
+    url = item.get("webViewLink") or f"https://drive.google.com/open?id={item['id']}"
+    return f"[InternetShortcut]\r\nURL={url}\r\n".encode("utf-8")
+
+
+def sync_file(service, item, out_dir, name, stats, shown, options=DEFAULT_OPTIONS):
+    """1ファイルを、出力のしかた（options）と種類に応じて書き出す
 
     戻り値: 作った出力の名前（out_dir の中での名前）。失敗したら None
     """
     mime = item["mimeType"]
     file_id = item["id"]
+    keep = options["keep_originals"]
     try:
+        if not options["ai_markdown"]:
+            # 人が使う同期: Google 形式はダウンロードできないので、元のファイルを開くショートカットにする
+            if is_google_file(item):
+                write_atomic(out_dir / f"{name}.url", shortcut_file(item))
+                return [f"{name}.url"]
+            write_atomic(out_dir / name, download_media(service, file_id))
+            return [name]
+
         if mime == DOC_MIME:
-            return markdown_or_pdf(
+            made = markdown_or_pdf(
                 service, item, out_dir, name,
                 lambda: save_doc_markdown(service, file_id, out_dir, name),
                 stats, shown,
             )
+            if keep:
+                write_atomic(out_dir / f"{name}.docx", export(service, file_id, DOCX_MIME))
+                made.append(f"{name}.docx")
+            return made
         if mime == SHEET_MIME:
             data = export(service, file_id, XLSX_MIME)
-            write_atomic(out_dir / f"{name}.xlsx", data)
-            return [f"{name}.xlsx"] + markdown_or_pdf(
+            made = markdown_or_pdf(
                 service, item, out_dir, name,
                 lambda: save_xlsx_markdown(out_dir, name, data),
                 stats, shown,
             )
+            if keep:
+                write_atomic(out_dir / f"{name}.xlsx", data)
+                made.append(f"{name}.xlsx")
+            return made
         if mime == SLIDES_MIME:
-            # スライドの Markdown 化は未実装なので、PPTX と PDF を両方作る
-            write_atomic(out_dir / f"{name}.pptx", export(service, file_id, PPTX_MIME))
+            # スライドの Markdown 化は未実装なので、AI が読める PDF を作る
             write_atomic(out_dir / f"{name}.pdf", export(service, file_id, PDF_MIME))
-            return [f"{name}.pptx", f"{name}.pdf"]
-        write_atomic(out_dir / name, download_media(service, file_id))
+            made = [f"{name}.pdf"]
+            if keep:
+                write_atomic(out_dir / f"{name}.pptx", export(service, file_id, PPTX_MIME))
+                made.append(f"{name}.pptx")
+            return made
+        data = download_media(service, file_id)
+        if is_excel(item):
+            # アップロードされた Excel: Markdown を作る（名前は「<元の名前>.md」。例: 予算.xlsx.md）
+            try:
+                made = save_xlsx_markdown(out_dir, name, data)
+            except Exception as e:
+                # 作れなければ、原本を残す（AI が読めなくても、資料が無くなるよりよい）
+                reason = describe_error(e)
+                print(f"  Markdown を作れなかったため原本のまま保存: {shown}  ({reason})")
+                stats["pdf_fallback"].append(f"{shown} → 原本のまま  ({reason})")
+                keep, made = True, []
+            if keep:
+                write_atomic(out_dir / name, data)
+                made.append(name)
+            return made
+        write_atomic(out_dir / name, data)
         return [name]
     except Exception as e:
         # 1ファイルの失敗で全体を止めない
@@ -287,7 +349,7 @@ def get_single_file(service, file_id):
     """個別ファイルの情報。消された・共有が外れた（404）なら空の一覧、ほかのエラーは「取れなかった」"""
     try:
         item = service.files().get(
-            fileId=file_id, fields="id, name, mimeType, modifiedTime", supportsAllDrives=True
+            fileId=file_id, fields="id, name, mimeType, modifiedTime, webViewLink", supportsAllDrives=True
         ).execute()
     except HttpError as e:
         if e.status_code == 404:
@@ -304,18 +366,28 @@ def new_stats():
             "skipped": [], "failed": [], "pdf_fallback": []}
 
 
-def load_state(config, target_name):
-    return SyncState(Path(config.get("state_root", "state")) / f"{safe_name(target_name)}.json", CONVERTER_VERSION)
+def load_state(config, target_name, options=None):
+    return SyncState(Path(config.get("state_root", "state")) / f"{safe_name(target_name)}.json", CONVERTER_VERSION,
+                     options)
 
 
-def sync_target(service, kind, target_name, out_dir, entries, complete, config, full):
+def target_options(target):
+    """同期先の出力のしかた。元のファイルを残すかは、AI 用に変換するときだけ意味がある"""
+    ai = target.get("ai_markdown", DEFAULT_OPTIONS["ai_markdown"])
+    keep = target.get("keep_originals", DEFAULT_OPTIONS["keep_originals"])
+    if not isinstance(ai, bool) or not isinstance(keep, bool):
+        sys.exit(f"設定エラー: 同期先「{target['name']}」の ai_markdown・keep_originals は true か false で書いてください。")
+    return {"ai_markdown": ai, "keep_originals": keep and ai}
+
+
+def sync_target(service, kind, target_name, out_dir, entries, complete, config, full, options=DEFAULT_OPTIONS):
     """同期先 1 つ分（kind が folder ならフォルダ 1 つ、file なら個別ファイル 1 つ）を同期する
 
     個別ファイルは、ほかの同期先と同じフォルダに置けるので、自分の出力以外には触らない
     （記録にないファイルの検査や、空のフォルダの片付けをしない）。
     """
     stats = new_stats()
-    state = load_state(config, target_name)
+    state = load_state(config, target_name, options)
     archiver = Archiver(config.get("archive_root", "archive"), safe_name(target_name), out_dir)
 
     # 出力先が変わった（設定の変更や、Drive のフォルダ名の変更）: 前の出力を新しい出力先へ移す
@@ -333,10 +405,14 @@ def sync_target(service, kind, target_name, out_dir, entries, complete, config, 
 
     if state.version_changed:
         print(f"  変換処理の版が変わったため、全部作り直します（版 {CONVERTER_VERSION}）")
+    if state.options_changed:
+        print(f"  出力のしかたが変わったため、全部作り直します（AI 用に変換: {options['ai_markdown']}、"
+              f"元のファイルも残す: {options['keep_originals']}）")
+    rebuild = full or state.version_changed or state.options_changed
 
     seen = set()
     for item, path in entries:
-        if not is_supported(item):
+        if not is_supported(item, options):
             print(f"  スキップ（未対応の種類）: {path}  [{item['mimeType']}]")
             stats["skipped"].append(path)
             continue
@@ -361,13 +437,13 @@ def sync_target(service, kind, target_name, out_dir, entries, complete, config, 
             or prev["modifiedTime"] != item["modifiedTime"]
             or not outputs_exist(out_dir, prev["outputs"])
         )
-        if not (full or state.version_changed or changed):
+        if not (rebuild or changed):
             stats["unchanged"] += 1
             continue
 
         rel_dir = PurePosixPath(path).parent
         (out_dir / rel_dir).mkdir(parents=True, exist_ok=True)
-        made = sync_file(service, item, out_dir / rel_dir, PurePosixPath(path).name, stats, path)
+        made = sync_file(service, item, out_dir / rel_dir, PurePosixPath(path).name, stats, path, options)
         if made is None:
             continue  # 失敗: 前回の出力と記録はそのまま残し、次回また試す
         outputs = [str(rel_dir / name) for name in made]
@@ -413,10 +489,10 @@ def print_summary(stats):
         f"--- 完了: 新規 {stats['new']} / 更新 {stats['updated']} / 変化なし {stats['unchanged']}"
         f" / 移動 {stats['moved']} / 退避 {stats['archived']}"
         f" / スキップ {len(stats['skipped'])} / 失敗 {len(stats['failed'])}"
-        f"（PDF で代替 {len(stats['pdf_fallback'])}） ---"
+        f"（Markdown を作れず代替 {len(stats['pdf_fallback'])}） ---"
     )
     for line in stats["pdf_fallback"]:
-        print(f"  PDF で代替: {line}")
+        print(f"  Markdown を作れず代替: {line}")
     for line in stats["failed"]:
         print(f"  失敗: {line}")
     print()
@@ -545,7 +621,8 @@ def run(args):
         if not args.config.exists():
             sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
         config = load_config(args.config)
-        active_targets(config)  # 名前の重複などの誤りは、Drive につなぐ前に見つける
+        for _, target in active_targets(config):  # 名前の重複などの誤りは、Drive につなぐ前に見つける
+            target_options(target)
 
         creds = Credentials.from_authorized_user_file(config["token_file"], SCOPES)
         service = build("drive", "v3", credentials=creds)
@@ -558,7 +635,8 @@ def run(args):
                     summary["errors"].append(f"{target['name']}: 一覧を最後まで取れなかった")
             else:
                 print(f"=== {target['name']}（個別ファイル） → {out_dir} ===")
-            stats = sync_target(service, kind, target["name"], out_dir, entries, complete, config, args.full)
+            stats = sync_target(service, kind, target["name"], out_dir, entries, complete, config, args.full,
+                                target_options(target))
             print_summary(stats)
             summary["targets"].append({
                 "name": target["name"], "kind": kind,

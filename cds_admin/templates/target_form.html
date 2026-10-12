@@ -38,6 +38,15 @@
       変えると、次の同期で今までの出力を新しい場所へ移します。
       {% if kind == "folder" %}フォルダの同期先どうしは、同じ場所や、中に入れる形にはできません。{% else %}ファイルは、ほかの同期先と同じフォルダに置けます（フォルダの同期先の中には置けません）。{% endif %}</p>
 
+    <fieldset class="options">
+      <legend>出力のしかた</legend>
+      <label class="choice"><input type="checkbox" name="ai_markdown" value="1" id="ai_markdown" {% if values.ai_markdown %}checked{% endif %}> AI 用に変換する（Markdown にする）</label>
+      <p class="muted small">オン: ドキュメント・スプレッドシート・アップロードされた Excel を、AI が読みやすい Markdown（.md）にします。スライドは PDF にします。<br>
+        オフ: 人が使う同期です。Google 形式のファイルは、元のファイルを開くショートカット（.url）にし、それ以外のファイルはそのままダウンロードします。</p>
+      <label class="choice sub"><input type="checkbox" name="keep_originals" value="1" id="keep_originals" {% if values.keep_originals %}checked{% endif %} {% if not values.ai_markdown %}disabled{% endif %}> 元のファイルも残す（.docx・.xlsx・.pptx）</label>
+      <p class="muted small sub">AI に読ませるだけなら不要です。変えると、次の同期でこの同期先を全部作り直し、作らなくなったファイルは退避へ移します。</p>
+    </fieldset>
+
     {% if kind == "folder" %}
     <label class="choice"><input type="checkbox" name="recursive" value="1" {% if values.recursive %}checked{% endif %}> サブフォルダの中も同期する</label>
     {% endif %}

@@ -32,6 +32,8 @@ output = "Example/GoogleDrive-AI/{drive_name}"  # 出力先（output_root から
                                    # フォルダの同期先どうしは、同じ場所・入れ子にできない
 folder_id = "YOUR_DRIVE_FOLDER_ID" # Drive のフォルダ URL の folders/ の後ろの文字列
 recursive = true                   # サブフォルダの中も対象にするか
+ai_markdown = true                 # AI 用に変換する（Markdown にする）。false なら人が使う同期（Google 形式はショートカット .url）
+keep_originals = false             # AI 用に変換するとき、元のファイル（.docx・.xlsx・.pptx）も残すか
 
 # 開発のときだけ同期する同期先（テストデータなど）。environments に書いた環境でだけ同期する
 # 環境は環境変数 CDS_ENV で決まる（Mac での開発は dev、NAS のコンテナは nas）

@@ -101,7 +101,8 @@ class TargetPagesTests(unittest.TestCase):
         return tomllib.loads(self.config_path.read_text(encoding="utf-8"))
 
     def save(self, **fields):
-        data = {"csrf": self.csrf(), "kind": "folder", "name": "", "drive": "", "output": "", "recursive": "1"}
+        data = {"csrf": self.csrf(), "kind": "folder", "name": "", "drive": "", "output": "", "recursive": "1",
+                "ai_markdown": "1"}
         data.update(fields)
         return self.client.post("/targets/save", data=data)
 
@@ -127,13 +128,15 @@ class TargetPagesTests(unittest.TestCase):
                              output="B/AI", recursive="")
         self.assertEqual(response.status_code, 303)
         added = self.config()["folders"][-1]
-        self.assertEqual(added, {"name": "案件B", "output": "B/AI", "folder_id": "folderBBBBBBBB", "recursive": False})
+        self.assertEqual(added, {"name": "案件B", "output": "B/AI", "folder_id": "folderBBBBBBBB", "recursive": False,
+                                 "ai_markdown": True, "keep_originals": False})
         self.assertIn("手で書いた設定", (self.config_path.parent / "config.toml.bak").read_text())  # 直前の内容を残す
         self.assertIn("Drive 上の名前: 別のフォルダ", self.client.get("/").text)
 
         self.save(kind="file", name="進行表", drive="https://docs.google.com/spreadsheets/d/sheetCCCCCCCCC/edit",
                   output="Proj/AI")
-        self.assertEqual(self.config()["files"], [{"name": "進行表", "output": "Proj/AI", "file_id": "sheetCCCCCCCCC"}])
+        self.assertEqual(self.config()["files"], [{"name": "進行表", "output": "Proj/AI", "file_id": "sheetCCCCCCCCC",
+                                                   "ai_markdown": True, "keep_originals": False}])
         self.assertEqual(self.config()["folders"][1]["environments"], ["nas"])  # ほかの同期先の設定は残る
 
     def test_groups(self):
@@ -249,6 +252,18 @@ class TargetPagesTests(unittest.TestCase):
         suggestion = targets.suggest_name(long_name)
         self.assertEqual(suggestion, "あ" * 63)
         self.assertEqual(targets.parse_name(suggestion), suggestion)
+
+    def test_output_options(self):
+        page = self.client.get("/targets/new?kind=folder").text
+        self.assertIn('id="ai_markdown" checked', page)  # 新しい同期先は AI 用に変換する・元のファイルは残さない
+        self.assertNotIn('id="keep_originals" checked', page)
+        self.save(name="人用", drive="folderBBBBBBBB", output="Human", ai_markdown="", keep_originals="1")
+        self.assertEqual({k: self.config()["folders"][-1][k] for k in ("ai_markdown", "keep_originals")},
+                         {"ai_markdown": False, "keep_originals": False})  # 変換しないなら、元のファイルを残すは意味がない
+        self.assertIn("そのまま", self.client.get("/").text)
+        self.save(original="人用", name="人用", drive="folderBBBBBBBB", output="Human", ai_markdown="1", keep_originals="1")
+        self.assertTrue(self.config()["folders"][-1]["keep_originals"])
+        self.assertIn("＋元のファイル", self.client.get("/").text)
 
     def test_output_root_note(self):
         page = self.client.get("/").text

@@ -12,7 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sync import clean_archive  # noqa: E402
-from sync_state import prune_archive  # noqa: E402
+import sync_state  # noqa: E402
+from sync_state import prune_archive, remove_tree  # noqa: E402
 
 
 class PruneArchiveTests(unittest.TestCase):
@@ -65,6 +66,31 @@ class PruneArchiveTests(unittest.TestCase):
     def test_missing_root(self):
         self.assertEqual(prune_archive(self.root, 10)["size"], 0)
 
+
+
+class RemoveTreeTests(unittest.TestCase):
+    def test_falls_back_without_following_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            keep = root / "keep"
+            keep.mkdir()
+            (keep / "important.txt").write_text("x")
+            victim = root / "victim"
+            (victim / "sub").mkdir(parents=True)
+            (victim / "sub" / "a.png").write_bytes(b"1")
+            (victim / "link").symlink_to(keep, target_is_directory=True)
+            original = sync_state.shutil.rmtree
+
+            def failing_rmtree(path, *args, **kwargs):  # SMB で「リンクかもしれない」と止まった場合
+                raise OSError("Cannot call rmtree on a symbolic link")
+
+            sync_state.shutil.rmtree = failing_rmtree
+            try:
+                remove_tree(victim)
+            finally:
+                sync_state.shutil.rmtree = original
+            self.assertFalse(victim.exists())
+            self.assertTrue((keep / "important.txt").exists())  # リンクの先は消さない
 
 
 class CleanArchiveTests(unittest.TestCase):

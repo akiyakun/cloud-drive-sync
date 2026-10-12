@@ -48,8 +48,8 @@ sudo install -o svc-cloud-drive-sync -g users -m 600 <コピー元>/token.json /
 | `output_root` | 出力先の土台。AI が読む場所 |
 | `state_root` | 前回の同期の記録の置き場所（既定は `state`）。AI が読む `output_root` とは分ける |
 | `archive_root` | Drive から消えたファイルの出力の退避先（既定は `archive`）。AI が読む `output_root` の外に置く |
-| `[[folders]]` | 同期するフォルダ（`name`、`output`、`folder_id`、`recursive`、`environments`） |
-| `[[files]]` | 個別に同期するファイル（`name`、`output`、`file_id`、`environments`） |
+| `[[folders]]` | 同期するフォルダ（`name`、`output`、`folder_id`、`recursive`、`ai_markdown`、`keep_originals`、`group`、`environments`） |
+| `[[files]]` | 個別に同期するファイル（`name`、`output`、`file_id`、`ai_markdown`、`keep_originals`、`group`、`environments`） |
 
 - `name` は同期先の名前。同期の記録（`state/<name>.json`）と退避（`archive/<name>/`）のフォルダ名にも使う。重複できない。
 - `output` は出力先（`output_root` から見た場所）。省略すると `name` と同じ。
@@ -65,14 +65,27 @@ sudo install -o svc-cloud-drive-sync -g users -m 600 <コピー元>/token.json /
 
 ## 出力
 
-| Drive 上の種類 | 出力 |
-|---|---|
-| Google ドキュメント | `<名前>.md`、`<名前>.images/`（画像・図形描画） |
-| Google スプレッドシート | `<名前>.xlsx`、`<名前>.md`、`<名前>.images/` |
-| Google スライド | `<名前>.pptx`、`<名前>.pdf`（Markdown 化は後回し） |
-| それ以外 | 原本のまま |
+同期先ごとに、出力のしかたを選ぶ（管理画面の「出力のしかた」。設定では `ai_markdown`・`keep_originals`）。
 
-Markdown を作れなかったときだけ、保険として `<名前>.pdf` を作る。変換の詳細は [export-format-findings.md](export-format-findings.md)。
+このツールの目的は 2 つある。
+
+1. **AI が読む専用の同期**（`ai_markdown = true`。既定）: 資料を AI が読みやすい形（Markdown と画像）にする。人は読まない
+2. **人が使う普通の同期**（`ai_markdown = false`）: Drive のファイルを NAS に置く。Google の公式アプリなどに Drive の権限を渡さずに済む
+
+| Drive 上の種類 | AI 用に変換する | ＋元のファイルも残す（`keep_originals = true`） | 変換しない（人が使う） |
+|---|---|---|---|
+| Google ドキュメント | `<名前>.md`、`<名前>.images/`（画像・図形描画） | ＋`<名前>.docx` | `<名前>.url`（元のファイルを開くショートカット） |
+| Google スプレッドシート | `<名前>.md`、`<名前>.images/` | ＋`<名前>.xlsx` | `<名前>.url` |
+| Google スライド | `<名前>.pdf`（Markdown 化は後回し） | ＋`<名前>.pptx` | `<名前>.url` |
+| そのほかの Google 形式（フォームなど） | 同期しない | 同期しない | `<名前>.url` |
+| アップロードされた Excel（`.xlsx`・`.xlsm`） | `<名前>.xlsx.md`、`<名前>.xlsx.images/` | ＋原本 | 原本のまま |
+| それ以外（PDF・画像など） | 原本のまま | 原本のまま | 原本のまま |
+
+- 元のファイルを残すかは、AI 用に変換するときだけ選べる（既定は残さない。AI に読ませるだけなら要らないため）。
+- ショートカット（`.url`）は Windows の「インターネット ショートカット」。Mac でも「Web サイトロケーション」として、ダブルクリックでブラウザが開く。Google 形式のファイルは、そのままではダウンロードできないため。
+- 人が使う同期も、Drive → NAS の一方向。NAS 側で編集しても Drive には戻らず、Drive 側が更新されると上書きされる。
+- Markdown を作れなかったときだけ、保険として `<名前>.pdf` を作る（アップロードされた Excel は、原本をそのまま残す）。実行結果には「Markdown を作れず代替」と出す。変換の詳細は [export-format-findings.md](export-format-findings.md)。
+- **出力のしかたを変えた同期先は、次の同期で全部作り直す。**作らなくなった出力（例: 元のファイルを残さないにしたときの `.xlsx`）は退避へ移す。前回の出力のしかたは、同期の記録（`state/<名前>.json` の `options`）に残す。
 
 ## 変更されたファイルだけを取り直す
 
