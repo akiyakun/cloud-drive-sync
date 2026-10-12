@@ -1,12 +1,14 @@
 # 認証情報（絶対にコミットしない）
+secrets/
 credentials.json
 token.json
 token.*.json
 *.token.json
 .env
 
-# 実際の設定（フォルダIDなど）
+# 実際の設定（フォルダIDなど）と管理データ（同期の記録・退避）
 *.local.toml
+data/
 
 # 同期・テストの出力
 output/

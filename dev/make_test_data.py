@@ -18,7 +18,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-TOKEN_FILE = "token.dev.json"
+TOKEN_FILE = "secrets/token.dev.json"
 
 FOLDER_NAME = "cloud-drive-sync-test"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -376,7 +376,7 @@ def main():
 
     print()
     print(f"テスト用フォルダの ID: {folder_id}")
-    print("（config.local.toml の [[folders]] に追加すると sync.py の対象になります）")
+    print("（data/config.toml の [[folders]] に追加すると sync.py の対象になります）")
 
 
 if __name__ == "__main__":

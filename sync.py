@@ -1,4 +1,4 @@
-"""設定ファイルに書いた Drive のフォルダ・ファイルを output/ に同期する（Drive 側は変更しない）
+"""設定ファイル（既定は data/config.toml）に書いた Drive のフォルダ・ファイルを同期する（Drive 側は変更しない）
 
 - Google ドキュメント → HTML 書き出しから作った Markdown（画像・図形描画は <名前>.images/ に取り出す）
 - Google スプレッドシート → XLSX と、XLSX から作った Markdown
@@ -15,8 +15,9 @@ PDF は、Markdown を作れなかったときだけ保険として作る。
 - 変換処理の版（markitdown_ext.CONVERTER_VERSION）が変わったら、全部作り直す
 
 使い方:
-    python sync.py          # 変更されたファイルだけ
-    python sync.py --full   # 全部作り直す
+    python sync.py                     # 変更されたファイルだけ
+    python sync.py --full              # 全部作り直す
+    python sync.py --config 別の設定.toml
 """
 
 import argparse
@@ -39,7 +40,7 @@ from markitdown_ext import CONVERTER_VERSION, GOOGLE_DOCS_ZIP_MIME, ConversionRe
 from sync_state import Archiver, SyncState, move_outputs, outputs_exist, remove_empty_dirs, untracked_files
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-CONFIG_FILE = Path("config.local.toml")
+DEFAULT_CONFIG = Path(os.environ.get("CDS_CONFIG", "data/config.toml"))
 
 DOC_MIME = "application/vnd.google-apps.document"
 SHEET_MIME = "application/vnd.google-apps.spreadsheet"
@@ -387,30 +388,50 @@ def print_summary(stats):
     print()
 
 
+def target_out_dirs(config):
+    """同期先ごとの出力先を決める
+
+    出力先は output_root の下の、同期先の「output」（省略時は同期先の名前）。
+    2 つの同期先が同じ場所・入れ子の場所を指すと、記録や退避が混ざるので、その場合は同期を始めずに止める。
+    """
+    output_root = Path(config["output_root"])
+    targets = [("folder", t) for t in config.get("folders", [])] + [("file", t) for t in config.get("files", [])]
+    names, out_dirs = set(), []
+    for kind, target in targets:
+        name = safe_name(target["name"])
+        if name in names:
+            sys.exit(f"設定エラー: 同期先の名前「{target['name']}」が重複しています。")
+        names.add(name)
+        out_dir = (output_root / target.get("output", name)).resolve()
+        for other_name, other in out_dirs:
+            if out_dir == other or out_dir in other.parents or other in out_dir.parents:
+                sys.exit(f"設定エラー: 「{target['name']}」と「{other_name}」の出力先が同じか入れ子になっています。")
+        out_dirs.append((target["name"], out_dir))
+        yield kind, target, out_dir
+
+
 def main():
     parser = argparse.ArgumentParser(description="Google Drive の資料を AI 向けの Markdown に同期する")
     parser.add_argument("--full", action="store_true", help="変更の有無にかかわらず全部作り直す")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=f"設定ファイル（既定: {DEFAULT_CONFIG}）")
     args = parser.parse_args()
 
-    if not CONFIG_FILE.exists():
-        sys.exit(f"{CONFIG_FILE} がありません。config.example.toml をコピーして作成してください。")
-    config = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    if not args.config.exists():
+        sys.exit(f"{args.config} がありません。config.example.toml をコピーして作成してください。")
+    config = tomllib.loads(args.config.read_text(encoding="utf-8"))
+    targets = list(target_out_dirs(config))  # 設定の誤りは、同期を始める前に見つける
 
     creds = Credentials.from_authorized_user_file(config["token_file"], SCOPES)
     service = build("drive", "v3", credentials=creds)
-    output_root = Path(config["output_root"])
 
-    for folder in config.get("folders", []):
-        out_dir = output_root / safe_name(folder["name"])
-        print(f"=== {folder['name']} → {out_dir} ===")
-        entries, complete = list_tree(service, folder["folder_id"], folder["recursive"])
-        print_summary(sync_target(service, folder["name"], out_dir, entries, complete, config, args.full))
-
-    for entry in config.get("files", []):
-        out_dir = output_root / safe_name(entry["name"])
-        print(f"=== {entry['name']}（個別ファイル） → {out_dir} ===")
-        entries, complete = get_single_file(service, entry["file_id"])
-        print_summary(sync_target(service, entry["name"], out_dir, entries, complete, config, args.full))
+    for kind, target, out_dir in targets:
+        if kind == "folder":
+            print(f"=== {target['name']} → {out_dir} ===")
+            entries, complete = list_tree(service, target["folder_id"], target.get("recursive", True))
+        else:
+            print(f"=== {target['name']}（個別ファイル） → {out_dir} ===")
+            entries, complete = get_single_file(service, target["file_id"])
+        print_summary(sync_target(service, target["name"], out_dir, entries, complete, config, args.full))
 
 
 if __name__ == "__main__":

@@ -5,22 +5,42 @@ Google Drive の資料を、AI が読みやすい形（Markdown と画像）に�
 ## 使い方
 
 ```bash
-python sync.py          # 新しいファイル・更新されたファイルだけを処理する
-python sync.py --full   # 変更の有無にかかわらず全部作り直す
+python sync.py                        # 新しいファイル・更新されたファイルだけを処理する
+python sync.py --full                 # 変更の有無にかかわらず全部作り直す
+python sync.py --config 別の設定.toml  # 設定ファイルを指定する（既定は data/config.toml。環境変数 CDS_CONFIG でも変えられる）
 ```
 
-## 設定（config.local.toml）
+## 置き場所
+
+リポジトリは NAS の Docker 共有（Mac からは `/Volumes/docker/cloud-drive-sync`）に置く。git に入れないものは次のとおり。
+
+| 場所 | 中身 | AI が読む？ |
+|---|---|---|
+| `secrets/` | `credentials.json`（OAuth クライアント）、`token.json`（同期用の鍵）、`token.dev.json`（開発用の鍵） | **読ませない** |
+| `data/config.toml` | 同期の設定 | 読まない |
+| `data/state/` | 前回の同期の記録 | 読まない |
+| `data/archive/` | Drive から消えたファイルの出力の退避先 | 読まない |
+| 出力先（`output_root` の下） | Markdown・画像など | **読む** |
+
+- **NAS の共有フォルダの中では `chmod`（ファイルごとの読み取り権限）が効かない。**誰が読めるかは、NAS 側の共有フォルダのアクセス権で決まる。`secrets/` の鍵は Docker 共有にアクセスできる人なら読めるので、Docker 共有のアクセス権は自分のアカウントだけにする。
+- Mac から NAS の共有フォルダを見ると、濁点などが分かれた形（Unicode の NFD）のファイル名が返る。名前を比べる処理では NFC にそろえる。
+
+## 設定（data/config.toml）
 
 | 項目 | 内容 |
 |---|---|
 | `token_file` | 読み取り専用の OAuth トークン（`auth.py` が作る） |
-| `output_root` | 出力先。AI が読む場所。同期先ごとに `output_root/<name>/` |
+| `output_root` | 出力先の土台。AI が読む場所 |
 | `state_root` | 前回の同期の記録の置き場所（既定は `state`）。AI が読む `output_root` とは分ける |
 | `archive_root` | Drive から消えたファイルの出力の退避先（既定は `archive`）。AI が読む `output_root` の外に置く |
-| `[[folders]]` | 同期するフォルダ（`name`、`folder_id`、`recursive`） |
-| `[[files]]` | 個別に同期するファイル（`name`、`file_id`） |
+| `[[folders]]` | 同期するフォルダ（`name`、`output`、`folder_id`、`recursive`） |
+| `[[files]]` | 個別に同期するファイル（`name`、`output`、`file_id`） |
 
-書き方の見本は `config.example.toml`。`state/`・`archive/`・`output/` は git に入れない。
+- `name` は同期先の名前。同期の記録（`state/<name>.json`）と退避（`archive/<name>/`）のフォルダ名にも使う。重複できない。
+- `output` は出力先（`output_root` から見た場所）。省略すると `name` と同じ。例: `Example/GoogleDrive-AI/仕様書`
+- **同期先どうしの出力先は、同じ場所・入れ子にできない**（記録や退避が混ざるため）。設定に誤りがあれば、同期を始める前に止める。
+
+書き方の見本は `config.example.toml`。
 
 ## 出力
 
@@ -89,7 +109,7 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
 
 ## 認証（OAuth）
 
-- 同期は `auth.py` で作る `token.json`（読み取り専用の `drive.readonly`）を使う。`token.json` は「Drive 全体を読める鍵」なので、持ち主だけが読める設定で保存し、AI が読む場所や git には置かない。
+- 同期は `auth.py` で作る `secrets/token.json`（読み取り専用の `drive.readonly`）を使う。`token.json` は「Drive 全体を読める鍵」なので、AI が読む場所や git には置かない。
 - Google Cloud の OAuth 同意画面は、対象ユーザー「外部」・公開ステータス「**本番環境**」（2026-10-12 に「テスト中」から切り替え）。
   - 「テスト中」のままだと、リフレッシュトークン（入館証を再発行するための鍵）が **7 日で切れ**、そのたびにブラウザでの認証が必要になる。NAS での自動実行に向かないため切り替えた。
   - 個人利用（100 人未満）なので、Google の審査は受けていない。認証のときに「確認されていないアプリ」の警告が出るのは正常。
@@ -99,7 +119,7 @@ Markdown を作れなかったときだけ、保険として `<名前>.pdf` を�
   - Google アカウントの「サードパーティ製のアプリとサービス」でアクセスを取り消した
   - 同じアプリで 100 回以上認証し直した（古いものから無効になる）
 - サービスアカウント（ロボット用のアカウント）は使わない。人から共有された資料を、ロボット用のアカウントへ共有し直せないことが多く、読めなくなるため。
-- 開発用の `dev/auth_dev.py`（`drive.file`、`token.dev.json`）も同じ仕組み。
+- 開発用の `dev/auth_dev.py`（`drive.file`、`secrets/token.dev.json`）も同じ仕組み。
 
 ## 今後の課題
 

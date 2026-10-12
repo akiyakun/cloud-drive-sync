@@ -20,6 +20,7 @@ Drive から消えたファイルの出力は、AI が読む場所（output/）�
 import json
 import os
 import shutil
+import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -109,14 +110,15 @@ def remove_empty_dirs(out_dir):
 def untracked_files(out_dir, files):
     """記録に載っていない出力（以前の版の出力など）を探す"""
     out_dir = Path(out_dir)
-    tracked = {rel for entry in files.values() for rel in entry.get("outputs", [])}
+    # Mac から NAS の共有フォルダを見ると、濁点などが分かれた形（NFD）の名前が返るので、NFC にそろえて比べる
+    tracked = {unicodedata.normalize("NFC", rel) for entry in files.values() for rel in entry.get("outputs", [])}
     found = []
     if not out_dir.exists():
         return found
     for path in sorted(out_dir.rglob("*")):
         if path.name.startswith(".") or not path.is_file():
             continue
-        rel = path.relative_to(out_dir).as_posix()
+        rel = unicodedata.normalize("NFC", path.relative_to(out_dir).as_posix())
         # 記録された出力そのもの、または記録された .images フォルダの中身なら対象外
         if rel in tracked or any(rel.startswith(t + "/") for t in tracked):
             continue

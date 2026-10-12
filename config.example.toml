@@ -1,29 +1,32 @@
 # CloudDrive-Sync 設定ファイルの見本
 #
-# 使い方: このファイルを config.local.toml という名前でコピーし、値を書き換える。
-#   cp config.example.toml config.local.toml
-# config.local.toml は .gitignore で除外されているので、実際の ID などはそちらに書く。
+# 使い方: このファイルを data/config.toml という名前でコピーし、値を書き換える。
+#   mkdir -p data && cp config.example.toml data/config.toml
+# data/ は .gitignore で除外されているので、実際の ID などはそちらに書く。
 
 # OAuth トークンの場所（auth.py が作るファイル）
-token_file = "token.json"
+token_file = "secrets/token.json"
 
-# 同期結果の出力先（フォルダごとに output_root/<name>/ の下へ保存する）
+# 同期結果の出力先の土台。同期先ごとに output_root/<output>/ の下へ保存する
 output_root = "output"
 
 # 前回の同期の記録（ファイル ID・更新日時など）の置き場所。AI が読む output_root とは分ける
-state_root = "state"
+state_root = "data/state"
 
 # Drive から消えたファイルの出力の退避先。AI が読む output_root の外に置く
-archive_root = "archive"
+archive_root = "data/archive"
 
 # 同期するフォルダ。[[folders]] のブロックを増やせば複数フォルダを別々の設定で扱える
 [[folders]]
-name = "example"                   # 出力先のサブフォルダ名（英数字推奨）
+name = "example"                   # 同期先の名前（同期の記録・退避のフォルダ名にも使う）
+output = "Example/GoogleDrive-AI/specs"  # 出力先（output_root から見た場所）。省略すると name と同じ
+                                   # 同期先どうしの出力先は、同じ場所・入れ子にできない（並べて置く）
 folder_id = "YOUR_DRIVE_FOLDER_ID" # Drive のフォルダ URL の folders/ の後ろの文字列
 recursive = true                   # サブフォルダの中も対象にするか
 
 # フォルダではなくファイルを1つだけ同期したいとき（共有されたファイルなど）
-# 出力先は output_root/<name>/ の下
+# 出力先は output_root/<output>/ の下
 [[files]]
-name = "example-file"              # 出力先のサブフォルダ名
+name = "example-file"              # 同期先の名前
+output = "Example/GoogleDrive-AI/shared"  # 出力先（省略すると name と同じ）
 file_id = "YOUR_DRIVE_FILE_ID"     # ファイル URL の /d/ の後ろの文字列
